@@ -1,0 +1,16 @@
+{
+  "name": "就医笺 · 就诊交接单",
+  "short_name": "就医笺",
+  "description": "把分散的病历和医嘱，整理成患者可核对、医生看得懂的就诊交接单。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f7f6",
+  "theme_color": "#0f766e",
+  "lang": "zh-CN",
+  "dir": "auto",
+  "icons": [
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

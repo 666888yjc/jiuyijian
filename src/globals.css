@@ -1,0 +1,186 @@
+/* 关掉 Tailwind 的自动内容扫描：默认会把 docs/*.md 与 dev/** 里的文本当类名候选，
+   产品码零改动也会让产物 CSS 涨几百字节、hash 漂移（轮次 9/11/12 三次取证）。
+   source(none) 后必须显式列出真正产类名的目录，少写一个那边界面就没样式。
+   注意：@source 只能排在所有 @import 之后，否则 PostCSS 报 "@import must precede all other statements"。 */
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+@source "../index.html";
+@source "../src";
+@source "../components";
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
+:root {
+  --background: #f4f7f6;
+  --foreground: #16302b;
+  --card: #ffffff;
+  --card-foreground: #16302b;
+  --popover: #ffffff;
+  --popover-foreground: #16302b;
+  --primary: #0f766e;
+  --primary-foreground: #ffffff;
+  --secondary: #e7efed;
+  --secondary-foreground: #16302b;
+  --muted: #eef3f2;
+  --muted-foreground: #556d6c;
+  --accent: #e3f0ee;
+  --accent-foreground: #16302b;
+  --destructive: #b3261e;
+  --border: #d5e0dd;
+  --input: #c8d6d3;
+  --ring: #0f766e;
+  --chart-1: #f54900;
+  --chart-2: #009689;
+  --chart-3: #104e64;
+  --chart-4: #ffb900;
+  --chart-5: #fe9a00;
+  --radius: 0.625rem;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #171717;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #e5e5e5;
+  --sidebar-ring: #a1a1a1;
+  --app-font-scale: 16px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui,
+    -apple-system, "Segoe UI", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New",
+    monospace;
+}
+
+html {
+  font-size: var(--app-font-scale);
+}
+
+html[data-fs="lg"] {
+  --app-font-scale: 18px;
+}
+
+html[data-fs="xl"] {
+  --app-font-scale: 21px;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  line-height: 1.65;
+}
+
+/* 减弱动效：vendor 的 prefers-reduced-motion 只管 .shimmer，弹窗的 zoom/fade 不在内
+   （Radix 的 animate-in/out 类由组件带，产品没有自定义动画可逐条豁免，这里统一收）。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 三类内容来源的视觉区分：颜色 + 文字标签 + 边框样式三重表达 */
+.field-ai {
+  border-left: 4px solid var(--primary);
+}
+
+.field-doc {
+  border-left: 4px dashed var(--muted-foreground);
+}
+
+.field-user {
+  border-left: 4px solid #2e7d32;
+}
+
+.field-highrisk {
+  outline: 1px solid color-mix(in srgb, var(--destructive) 45%, transparent);
+}
+
+/* 证据查看器中的原文高亮 */
+.evidence-hit {
+  background: color-mix(in srgb, #ffd54f 55%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #ffd54f 55%, transparent);
+  border-radius: 2px;
+}
+
+/* HE-09：从交接单编辑页排除列表逐条「去处理」跳入核对页时的字段卡片定位高亮（屏幕态，打印无意义） */
+.field-focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  .print-area {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  @page {
+    margin: 14mm;
+  }
+}
