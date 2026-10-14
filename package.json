@@ -1,7 +1,21 @@
 {
-  "name": "qoder-site-react-starter",
+  "name": "jiuyijian",
   "version": "0.1.0",
   "private": true,
+  "description": "离线优先的就诊交接单 PWA：把病历、化验单、处方整理成患者可核对、医生看得懂的交接单（未经临床专业审核，不提供诊断或用药建议）",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/666888yjc/jiuyijian.git"
+  },
+  "homepage": "https://github.com/666888yjc/jiuyijian#readme",
+  "keywords": [
+    "pwa",
+    "offline-first",
+    "patient-handoff",
+    "medical-records",
+    "privacy-first"
+  ],
   "engines": {
     "node": ">=22.12.0 <23"
   },
@@ -12,8 +26,10 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && node scripts/build.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "dev:api": "node dev/api-fixture/server.mjs 8000",
-    "check:function": "deno check functions/index.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:e2e": "node dev/local-app/e2e.mjs",
+    "dev:api": "node dev/api-fixture/server.mjs 8000"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

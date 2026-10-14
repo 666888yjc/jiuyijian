@@ -1,14 +1,14 @@
-// 就医笺 · 本机识别链路的端到端自证（R123）。
+// 就医笺 · 本机识别链路的端到端自证。
 //
 // 这条脚本存在的理由：`dev/local-app/server.mjs` 是"给家属在自己电脑上跑"的东西，
 // 它坏了不会有人收到一条红判据，只会有一位在诊室里打不开页面的家属。所以这里跑的是
 // **真进程、真 HTTP、真落盘、真重启**，而不是把 handler 拉进内存假装走过。
 //
 // 全程不出本机：模型端点是 `dev/local-app/fake-model.mjs`（只绑 127.0.0.1），
-// 用的图片是仓库里那份标着 synthetic 的合成件（`dev/real-samples/prep/fx-ct-report-20260926.jpg`），不是真实病历。
+// 用的图片是下面 `syntheticImage()` 现场生成的确定性合成件（棋盘格灰度图，不含任何真实病历内容）。
 //
 // 用法：node dev/local-app/e2e.mjs [--keep]   （--keep 保留临时数据目录给人工复查）
-// 三态退出码：0 全过｜1 有断言红｜2 前置不满足（起不来进程／找不到合成件／一条断言都没跑成）——绝不给部分绿。
+// 三态退出码：0 全过｜1 有断言红｜2 前置不满足（起不来进程／一条断言都没跑成）——绝不给部分绿。
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { createHash, randomBytes } from "node:crypto";
@@ -20,15 +20,31 @@ import { once } from "node:events";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", "..");
-const { scopedTempName } = await import("../regression/mutant-paths.mjs");
+
+// 与判据层临时名生成同形的一行工具（公开仓不随包外发判据层，此处内联；
+// 语义只有一条：同名临时件按 pid 加后缀，两轮并发不互相踩）。
+function scopedTempName(name, pid) {
+  const tail = "-" + pid;
+  const m = /^(.+?)(\.[A-Za-z][A-Za-z0-9]*)$/.exec(name);
+  return m ? m[1] + tail + m[2] : name + tail;
+}
 
 const KEEP = process.argv.includes("--keep");
-// 数据目录按 R123 那条闸门**必须在仓库外**（本机服务器自己会拒仓库内目录，e2e 不能例外于被测方的规矩），
-// 又按 R120/R121 那条规矩必须按 pid 命名并在收场删干净——落点选系统临时目录。
-const DATA_DIR = resolve(tmpdir(), scopedTempName("jyj-r123-e2e-data", process.pid));
+// 数据目录按闸门**必须在仓库外**（本机服务器自己会拒仓库内目录，e2e 不能例外于被测方的规矩），
+// 又必须按 pid 命名并在收场删干净——落点选系统临时目录。
+const DATA_DIR = resolve(tmpdir(), scopedTempName("jyj-e2e-data", process.pid));
 const PASSCODE = `e2e-${process.pid}`;
-const IMAGE = join(ROOT, "dev/real-samples/prep/fx-ct-report-20260926.jpg");
 const NOW = "2026-10-03T00:00:00.000Z";
+
+// 端到端要一张图跑真上传＋真识别。完整树里这份合成件在 dev/real-samples/（不随公开仓外发：
+// 导出清单只含产品与本机链路），所以这里用一段确定性的最小 JPEG 现场生成同一职责的测试件——
+// 棋盘格灰度图，内容与任何真实患者无关；假模型按场景回话、不解图，图只承担「上传／取回逐字节一致」
+// 那一类断言，因此字节确定即可复现。
+function syntheticImage() {
+  const b64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABQODxIPDRQSEBIXFRQYHjIhHhwcHj0sLiQySUBMS0dARkVQWnNiUFVtVkVGZIhlbXd7gYKBTmCNl4x9lnN+gXz/wAALCACAAGABAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/ALtWbT+P8KsVnVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVX+yf7f6Uf8ev+1u/Cj7X/sfrR9k/2/0o/wCPX/a3fhR9r/2P1o+yf7f6Uf8AHr/tbvwo+1/7H60fZP8Ab/Sj/j1/2t34Ufa/9j9asVXu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arUVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVnVZtP4/wqxVf7J/t/pR/x6/7W78KPtf8AsfrR9k/2/wBKP+PX/a3fhR9r/ANj9aPsn+3+lH/Hr/tbvwo+1/wCx+tH2T/b/AEo/49f9rd+FH2v/AGP1qxVe7/g/Gq1aNV7v+D8arVo1Xu/4PxqtWjVe7/g/Gq1FWbT+P8KsVnVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVX+yf7f6Uf8AHr/tbvwo+1/7H60fZP8Ab/Sj/j1/2t34Ufa/9j9aPsn+3+lH/Hr/ALW78KPtf+x+tH2T/b/Sj/j1/wBrd+FH2v8A2P1qxVe7/g/Gq1aNV7v+D8arVo1Xu/4PxqtWjVe7/g/Gq1FWbT+P8KsVnVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVX+yf7f6Uf8ev+1u/Cj7X/sfrR9k/2/0o/49f8Aa3fhR9r/2P1o+yf7f6Uf8AHr/tbvwo+1/7H60fZP8Ab/Sj/j1/2t34Ufa/9j9asVXu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arUVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVnVZtP4/wqxX//2Q==";
+  return new Uint8Array(Buffer.from(b64, "base64"));
+}
+const imageBytes = syntheticImage();
 
 const results = [];
 const failed = [];
@@ -96,11 +112,6 @@ const waitFor = async (fn, ms = 2500) => {
   }
 };
 
-if (!existsSync(IMAGE)) {
-  console.error(`前置不满足：找不到合成件 ${IMAGE} —— 端到端要拿它跑真上传＋真识别，不用真实病历。`);
-  process.exit(2);
-}
-const imageBytes = new Uint8Array(readFileSync(IMAGE));
 const imageSha = createHash("sha256").update(imageBytes).digest("hex");
 
 const children = [];

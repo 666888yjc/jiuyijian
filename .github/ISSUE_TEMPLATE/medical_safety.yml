@@ -1,0 +1,36 @@
+name: 医疗安全 / 免责表述问题
+description: 边界声明、免责文案、「识别必确认」闸门或「不诊断」底线存在问题或被削弱
+labels: ["medical-safety", "priority"]
+body:
+  - type: textarea
+    id: issue
+    attributes:
+      label: 问题描述
+      description: 哪一处表述或行为与「不诊断 / 识别必确认 / 私密默认」三条底线不符？引用具体页面位置或文案。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据
+      description: 截图（脱敏）、相关代码位置（文件:行号）或产品内文案原文。
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 严重度判断
+      description: 你的判断，维护者会复核。
+      options:
+        - 高：可能让用户做出错误的医疗决策，或让资料离开设备
+        - 中：表述含糊，可能被误解
+        - 低：文案/一致性问题，无实际误导风险
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我确认没有在报告中包含真实患者资料
+          required: true
