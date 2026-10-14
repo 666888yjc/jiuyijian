@@ -60,6 +60,8 @@ const { CloudAgentsError } = await import("../../functions/cloud-agents.mjs");
 const { makeSupabaseLite, makeEmptyTables, hydrateTables, TABLE_NAMES } = await import("../backend-local/supabase-lite.mjs");
 const { makeObjectStore } = await import("../backend-local/object-store.mjs");
 const { assertModelEndpoint, makeOpenAiCompatChat } = await import("../backend-local/openai-chat.mjs");
+// 回环名单只用产品那一份（R144）：这里再写一份数组，就等于允许它哪天与栅栏悄悄不一致
+const { isLoopbackHost } = await import("../../functions/cloud-llm-http.mjs");
 const { resolveDistRoot, distCandidatesReport, serveStatic, MIME } = await import("../backend-local/static.mjs");
 
 // ---------- 落盘：表 ----------
@@ -175,7 +177,7 @@ if (AI_ENDPOINT) {
     // R96 那条纪律的另一面：**按真实传输目标判 `real`／`test`**，不按"配了没配"判。
     // 指向回环（本机那个假端点）时必须是 test——否则界面会对家属说"这一条是从你上传的资料里认出来的"，
     // 而那一段其实是剧本里的台词，正是 09-28 主理人拿手机撞见并质问的那一格。
-    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    const loopback = isLoopbackHost(url.hostname);
     modelKind = loopback ? "test" : "real";
     aiSummary = `${url.host}${url.pathname}｜模型 ${MODEL_NAME || "（端点默认）"}｜鉴权头 ${AI_AUTH_STYLE === "wb" ? "x-wb-webapp-access-key" : "Authorization: Bearer"}（值未打印）`
       + (loopback ? "｜回环端点 ⇒ 界面按「测试假模型」逐条披露" : "");

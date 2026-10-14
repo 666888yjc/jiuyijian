@@ -4,6 +4,7 @@ import { requireUser, getUser, UserContextError } from "./auth.mjs";
 import { DbError } from "./db.mjs";
 import { CloudAgentsError } from "./cloud-agents.mjs";
 import { verifyUploadedObject } from "./storage-validation.mjs";
+import { causeTail, DETAIL_MAX, detailTag } from "./error-detail.mjs";
 import { makeDb } from "./db.mjs";
 import { makeCoordinator } from "./coordinator.mjs";
 import { makeQuotaGuard, QUOTA_DEFAULTS } from "./quota.mjs";
@@ -238,14 +239,29 @@ export function createHandler({ storage, extract, quotaLimits = null, modelKind 
         const idKey = await hexDigest(`${row.id}|${body.mediaType}|${versionTag}|${await hexDigest(body.imageBase64)}`);
         let jobId = null;
         let reused = null;
+        let lastFailedCause = "";
         for (let attempt = 0; attempt < 3 && !jobId; attempt += 1) {
           const candidate = deterministicJobId(await hexDigest(`${idKey}#${attempt}`));
           const existing = await db.getJob(candidate, ownerId);
           if (!existing) { jobId = candidate; continue; }
           // 已完成 ⇒ 直接复用结果；在途 ⇒ 绝不第二次烧积分；失败 ⇒ 换下一个 attempt 重开
-          if (existing.state === "failed") continue;
+          if (existing.state === "failed") { lastFailedCause = String(existing.error_code ?? "") || "unknown"; continue; }
           jobId = candidate;
           reused = existing;
+        }
+        if (!jobId) {
+          // 三个幂等位全被"已失败"的作业占满 ⇒ 在这里就停：往下走会拿 `id=null` 去插一行——真服务器回一个
+          // 看着像数据库故障的码（实测 `write_rejected`），而夹具那份查询引擎收得下 null ⇒ 幽灵行 + 第四次
+          // 模型请求照发（"同一张图最多烧三次"这道护栏在那种语义下根本没兜住）。真实成因本来就写在那几行的
+          // error_code 里，把它如实带回界面，别让它塌成一句「服务暂不可用，请稍后重试」。
+          // detail 的头**必须是码本身**（与产品既有形状一致：`码@阶段`）——资料页那句是
+          // `error.detail || error.code` 喂进查表函数的，头上放一个表里没有的串就退到兜底句
+          // 「识别未完成，可重试或改用人工录入。」，而那正是这句要避免的假指引（同一张图再试不会有新作业）。
+          return json({
+            ok: false, error: "extract_retry_exhausted",
+            // 头是码、尾是那几行里记着的阶段；预算按 `码@` 之后剩多少算，拼完整条永远 ≤64（超了界面是整条丢，不是截断）
+            detail: detailTag(`extract_retry_exhausted@${causeTail(lastFailedCause, DETAIL_MAX - "extract_retry_exhausted@".length)}`),
+          }, 409);
         }
         const nowIso = new Date().toISOString();
         if (!reused) {

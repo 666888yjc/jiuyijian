@@ -28,7 +28,7 @@ import { ACTION_TYPE_LABELS } from "../types";
 import { TaskShell } from "./TaskShell";
 
 export function SummaryPage({ task }: { task: VisitTask }) {
-  const { state: allState, dispatch } = useStore();
+  const { state: allState, dispatch, readOnly } = useStore();
   const [copied, setCopied] = useState(false);
   const [copyFallback, setCopyFallback] = useState<string | null>(null);
   const today = todayDateStr();
@@ -183,6 +183,7 @@ export function SummaryPage({ task }: { task: VisitTask }) {
               rows={3}
               maxLength={2000}
               value={task.summaryNote ?? ""}
+              readOnly={readOnly}
               onChange={(e) => dispatch({ type: "summary.setNote", taskId: task.id, note: e.target.value })}
               placeholder="例如：服药一周后夜间憋醒减少；本周两次头晕，持续数分钟。只写观察到的事实，不要写诊断结论。"
             />

@@ -136,7 +136,7 @@ function mergeExtractResult(task: VisitTask, doc: SourceDocument, result: Extrac
 }
 
 export function DocsPage({ task }: { task: VisitTask }) {
-  const { dispatch } = useStore();
+  const { dispatch, readOnly } = useStore();
   const sync = useSync();
   const inputRef = useRef<HTMLInputElement>(null);
   const [jobs, setJobs] = useState<Record<string, DocJob>>({});
@@ -454,7 +454,7 @@ export function DocsPage({ task }: { task: VisitTask }) {
           }}
         />
         <div className="mt-3 flex gap-2">
-          <Button onClick={() => inputRef.current?.click()}>选择文件上传</Button>
+          <Button disabled={readOnly} onClick={() => inputRef.current?.click()}>选择文件上传</Button>
           <Button variant="outline" onClick={() => navigate(`/t/${task.id}/review`)}>去核对信息</Button>
         </div>
       </section>

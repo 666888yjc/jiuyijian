@@ -64,7 +64,7 @@ interface SyncContextValue {
 const Ctx = createContext<SyncContextValue | null>(null);
 
 export function SyncProvider({ children }: { children: ReactNode }) {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, writer } = useStore();
   const [user, setUser] = useState<ServerUser | "checking">("checking");
   const [serverMode, setServerMode] = useState(false);
   const [backend, setBackend] = useState<BackendStatus>("checking");
@@ -94,6 +94,12 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
   const serverModeRef = useRef(serverMode);
   serverModeRef.current = serverMode;
+  // R136：不是写者的那一页不许推服务器（它的状态是别人那一份的影子）。防抖里再挡一道，
+  // 免得以后有人从别的通路直接调 `queueSave()` 绕过上面那条。
+  // 这一道门吃的是 `writer`（这一页有没有写权限），**不是**屏幕上那句只读提示——
+  // 对面关页后提示会收起来，但这一页要等自己按下才接管；那之前它仍然不许碰服务器与同步锚点。
+  const writerRef = useRef(writer);
+  writerRef.current = writer;
 
   // 登录态与服务器任务加载
   useEffect(() => {
@@ -107,6 +113,15 @@ export function SyncProvider({ children }: { children: ReactNode }) {
         if (!me) {
           setBackend("up");
           setServerMode(false);
+          return;
+        }
+        // R136：只读那一页在这里就停住——它不做合并、不写锚点、不补删服务器行、也不采纳服务端行。
+        // 这四件事每一件都动**两个页面共享的那两份存储**（任务本体与同步锚点），
+        // 而"我这一页比较旧"绝不能由一次挂载就悄悄盖到对面那一页去（R70／R74 同一族）。
+        // 它显示的就是对面那一页刚写进本机存储的那一份（同源共享），要改回那一页——提示里说的正是这句。
+        if (!writerRef.current) {
+          setBackend("up");
+          setServerMode(true);
           return;
         }
         const rows = await api.listTasks();
@@ -163,13 +178,14 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [dispatch, nonce]);
+  }, [dispatch, nonce, writer]);
 
   // 写穿：任务内容变化后防抖保存
   const queueSave = useCallback(() => {
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
       void (async () => {
+        if (!writerRef.current) return; // 不是写者那一页不写服务器（见上）
         const tasks = stateRef.current.tasks.filter(isSyncable);
         const anchors = readSyncAnchors();
         let anySaved = false;
@@ -256,6 +272,13 @@ export function SyncProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!serverMode || user == null || user === "checking") return;
+    // R136：这一页不是写者（写权限在另一页手上）⇒ 既不推、也不冒充「已同步」——它屏幕上显示的是**那一页**的当前内容，
+    // 那份内容推没推上去由持有写权限的那一页去说；这一页说什么都是替别人说话。停在那条纪律之前的一档「云端模式」，
+    // 而"这一页只读"由页顶那句 `WRITER_LOCK_NOTICE` 说（同一条纪律的另一面：不许只让按钮没反应）。
+    if (!writer) {
+      setSyncState("idle");
+      return;
+    }
     // 「已同步」这句只能由"真的没有待推的改动"推出来（R70）：
     // 以前 load 一结束就无条件 setSyncState("saved")，而那笔刚改完、还在防抖窗口里的动作根本没出去。
     // R74：判"有没有待推"不许拿"内存里不记得"当依据——基线空了就问锚点；
@@ -266,7 +289,7 @@ export function SyncProvider({ children }: { children: ReactNode }) {
     );
     setSyncState(blockedRef.current.size ? "rejected" : conflictRef.current.size ? "conflict" : dirty ? "saving" : "saved");
     if (dirty) queueSave();
-  }, [serverMode, user, state, queueSave]);
+  }, [serverMode, user, state, queueSave, writer]);
 
   const retry = useCallback(() => {
     setSyncState("idle");

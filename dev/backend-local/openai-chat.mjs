@@ -10,8 +10,8 @@
 //     （`isUngroundedVerdict`）一行都不用改，越界句子照样被拦。
 // 凭据只从入参来（调用方从环境变量读），本文件不打印、不写盘、也不把它放进任何错误对象。
 import { CloudAgentsError } from "../../functions/cloud-agents.mjs";
-
-const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+// 回环名单只用产品那一份（R140 把"两处判定就可能一处放宽一处没放宽"钉成了判据；这一家多一份 Set 就是第三处）
+import { isLoopbackHost } from "../../functions/cloud-llm-http.mjs";
 
 /**
  * 端点校验与产品同一条口径：**必须 https**，只有回环例外（给本机假服务/自建代理用）。
@@ -30,7 +30,7 @@ export function assertModelEndpoint(endpoint) {
     error.phase = "config";
     throw error;
   }
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK.has(url.hostname))) {
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHost(url.hostname))) {
     const error = new CloudAgentsError("llm_endpoint_not_https", 503, "not_sent");
     error.phase = "config";
     throw error;
@@ -66,8 +66,16 @@ function* parseSseText(text) {
  * @returns {(body: object) => Promise<AsyncIterable<object>>} 与 `makeCloudLlmExtractionAdapter({ chat })` 的接缝同形
  */
 export function makeOpenAiCompatChat({ endpoint, key = "", authStyle = "bearer", timeoutMs = 60_000, fetchImpl = globalThis.fetch } = {}) {
-  const url = assertModelEndpoint(endpoint);
-  return async (body) => {
+  // R144：栅栏**不在构造那一刻抛**（与产品 `makeCloudLlmChat` 在 R115 修的同一格）。
+  // 之前这里一构造就 assert，配错协议/空端点的调用方连 `probe()` 都拿不到——而 `probe` 存在的目的正是
+  // 「配错了也要说得出配错的是哪一种形状」。真发请求时照旧拒（下面 `const url = assertModelEndpoint(endpoint)`），
+  // 本机服务器那一侧仍然\"配置不对就不起\"（它自己先调了一遍 assert），这条主张没被削弱。
+  let endpointUrl = null;
+  try {
+    endpointUrl = assertModelEndpoint(endpoint);
+  } catch { endpointUrl = null; }
+  const chat = async (body) => {
+    const url = endpointUrl ?? assertModelEndpoint(endpoint);
     if (!String(key).trim()) {
       const error = new CloudAgentsError("llm_key_missing", 503, "not_sent");
       error.phase = "config";
@@ -129,4 +137,39 @@ export function makeOpenAiCompatChat({ endpoint, key = "", authStyle = "bearer",
       }
     })();
   };
+  /**
+   * 本机这条通路的自检读数（R144）：与产品那份 `makeCloudLlmChat` 的 `chat.probe` **同一个形状**，
+   * 因为 `functions/cloud-llm.mjs` 的 `ping()` 只认这一种接缝——少一格就会退成 `llm_probe_missing`，
+   * 主理人在自己电脑上照样答不出\"配没配上\"那一半。
+   *
+   * 零外发：一个字节都不发、不落库、不建作业；只报**形状**不报值（端点原文与 key 本体都不许进读数，
+   * 它会回到浏览器也会进证据件），栅栏用的就是本文件那一条 `assertModelEndpoint`（不另起第二份判定）。
+   */
+  chat.probe = () => {
+    const raw = String(endpoint ?? "");
+    const keyText = String(key ?? "");
+    const keyShape = { configured: keyText !== "", length: keyText.length };
+    let shape = { configured: raw !== "", protocol: null, loopback: null, hostChars: 0 };
+    try {
+      const parsed = new URL(raw);
+      shape = {
+        configured: true,
+        protocol: parsed.protocol.replace(/:$/, ""),
+        loopback: isLoopbackHost(parsed.hostname),
+        hostChars: parsed.hostname.length,
+      };
+    } catch { /* 解析不了就是 protocol=null，下面那道栅栏会给出 llm_endpoint_invalid */ }
+    try {
+      assertModelEndpoint(raw);
+    } catch (error) {
+      // 两份传输层的 CloudAgentsError **构造位置不一样**：产品那份把成因名放在 outcome（第三个实参），
+      // 这一份放在 code、outcome 是 not_sent。取\"有信息量的那一个\"，两条通路才能对同一个错配给同一个读数
+      // （否则本机通路上\"配错协议\"与\"配错主机\"又塌成同一句，正是 R140 打掉的形状）。
+      const diagnostic = error?.outcome && error.outcome !== "not_sent" ? error.outcome : (error?.code ?? "llm_endpoint_invalid");
+      return { ok: false, outcome: diagnostic, endpoint: shape, key: keyShape, model: null };
+    }
+    if (keyText === "") return { ok: false, outcome: "llm_key_missing", endpoint: shape, key: keyShape, model: null };
+    return { ok: true, endpoint: shape, key: keyShape, model: null };
+  };
+  return chat;
 }

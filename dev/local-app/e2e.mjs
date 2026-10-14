@@ -254,34 +254,108 @@ try {
     escapePut.status === 400 && (escapeGet.status === 404 || !escapeBody.includes('"dependencies"')),
     `PUT=${escapePut.status} GET=${escapeGet.status}`);
 
-  // ── 22～23 重启之后还在（这才叫本机服务器，不是内存玩具）──────────────────
+  // ── 22～26 R141 那一格搬到真进程这条路上：同一张图三次失败之后，第四次不许再花钱，也不许报成数据库坏了 ──
+  // 20 那条已经证过一次「拒答当场 503＋带阶段码」；这一组要的是**幂等位次用尽之后**的形状，
+  // 而且核的是本机服务器**真落盘**的那份作业表与假端点**自己的计数**——夹具绿不算绿（R123 立这条 e2e 的理由）。
+  const setScenario = async (name) => (await fetch("http://127.0.0.1:" + modelPort + "/_default", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenario: name }),
+  })).status;
+  const modelCount = async () => (await (await fetch("http://127.0.0.1:" + modelPort + "/_fake/state")).json().catch(() => null)) ?? {};
+  const jobsOnDisk = async (docId, limit = 20) => {
+    // 落盘是**去抖**写的（scheduleFlush 120ms），而建行的那一刻与"失败回写"是两笔：读到"建行后、回写前"那份快照就会看见一条 pending。
+    // 所以要等到**这一批都落成终态**再判（R74 那条老纪律：不记得≠没有，没等够≠没发生）；等不到就用最后读到的那份去判——真卡住仍然会红，不会被掩盖。
+    const file = join(DATA_DIR, "tables.json");
+    let rows = [];
+    for (let i = 0; i < limit; i += 1) {
+      const t2 = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+      rows = (t2.extract_jobs ?? []).filter((r) => r.doc_id === docId);
+      if (rows.length && rows.every((r) => r.state === "failed" || r.state === "completed")) return rows;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return rows;
+  };
+
+  const declare141 = await setScenario("refuse");
+  const doc141 = await api("upload-intent", { taskId, name: "e2e-exhaust.jpg", mime: "image/jpeg", size: imageBytes.byteLength });
+  await putObject(doc141.body.signedUrl);
+  await api("upload-complete", { docId: doc141.body.docId });
+  const rounds141 = [];
+  for (let i = 0; i < 3; i += 1) rounds141.push(await api("extract-start", { docId: doc141.body.docId, mediaType: "image/jpeg", imageBase64: b64 }));
+  t("22 同一张图三次发起各占一个位次、每次都如实回当次成因（真进程这条路上也是 503＋阶段码，不塌成一个万能串）",
+    declare141 === 200 && rounds141.every((r) => r.status === 503 && r.body?.error === "ai_service_unavailable"
+      && /ai_refused@/.test(String(r.body?.detail ?? "")) && !r.body?.jobId),
+    JSON.stringify(rounds141.map((r) => r.status + "/" + String(r.body?.detail ?? r.body?.error ?? ""))).slice(0, 240));
+
+  const diskBefore = await jobsOnDisk(doc141.body.docId);
+  const modelBefore = await modelCount();
+  const fourth141 = await api("extract-start", { docId: doc141.body.docId, mediaType: "image/jpeg", imageBase64: b64 });
+  const modelAfter = await modelCount();
+  const detail141 = String(fourth141.body?.detail ?? "");
+  t("23 位次用尽后的第四次回 409 extract_retry_exhausted、不再发 jobId，detail 的头是码、尾是那几行里记着的阶段",
+    fourth141.status === 409 && fourth141.body?.error === "extract_retry_exhausted" && !fourth141.body?.jobId &&
+      /^extract_retry_exhausted@[a-z0-9_]+$/.test(detail141) && /refusal/.test(detail141),
+    "status=" + fourth141.status + " " + JSON.stringify(fourth141.body ?? {}).slice(0, 160));
+  t("24 第四次模型侧一个新请求都不发、一分积分都不花（假端点自己报的 requests／creditsSpent 前后一字不动）＝「同一张图最多烧三次」在真通路上真兜住了",
+    (modelBefore.requests ?? -1) === (modelAfter.requests ?? -2) && (modelBefore.creditsSpent ?? -1) === (modelAfter.creditsSpent ?? -2) &&
+      (modelAfter.requests ?? 0) >= 5,
+    JSON.stringify({ 前: { r: modelBefore.requests, c: modelBefore.creditsSpent }, 后: { r: modelAfter.requests, c: modelAfter.creditsSpent } }));
+  const diskAfter = await jobsOnDisk(doc141.body.docId);
+  t("25 落盘那本账上：这三轮只多出 3 条 failed、第四次没有再建行，也没有 id 为空的幽灵行（夹具那份收 null 主键的引擎今天正是漏掉的那一半）",
+    diskBefore.length === 3 && diskAfter.length === 3 && diskAfter.every((r) => r.state === "failed" && typeof r.id === "string" && r.id.length > 0),
+    JSON.stringify({ 前三次后: diskBefore.length, 第四次后: diskAfter.length, 状态: diskAfter.map((r) => r.state).join(","), 空id行: diskAfter.filter((r) => !r.id).length }));
+
+  // 先把它换回"能认出来"那一档再发这一单：否则"换一张照常受理"那条正样本测的仍是拒答（仪器自己不合格）
+  await setScenario("");
+  const docAlt141 = await api("upload-intent", { taskId, name: "e2e-alt.jpg", mime: "image/jpeg", size: imageBytes.byteLength });
+  await putObject(docAlt141.body.signedUrl);
+  await api("upload-complete", { docId: docAlt141.body.docId });
+  const altStart141 = await api("extract-start", { docId: docAlt141.body.docId, mediaType: "image/jpeg", imageBase64: b64 });
+  const altPoll141 = await poll(altStart141.body?.jobId);
+  const altFields = altPoll141?.result?.fields ?? [];
+  t("26 正样本：换一张资料（新幂等键）后同一张图仍能正常发起并拿到结果——这道闸挡的是「反复烧同一张」，不是识别本身",
+    altStart141.status === 200 && Boolean(altStart141.body?.jobId) && altPoll141?.state === "completed" && altFields.length > 0,
+    JSON.stringify({ start: altStart141.status, state: altPoll141?.state, 字段: altFields.length }).slice(0, 200));
+
+  // ── 27～28 重启之后还在（这才叫本机服务器，不是内存玩具）──────────────────
   await kill(boot.child);
   const boot2 = await start("dev/local-app/server.mjs", bootArgs(serverPort), "本机识别链路", keyEnv);
   children.length = 0;
   children.push(model.child, boot2.child);
   const tasksAfter = await api("tasks");
-  t("22 重启后任务还在（从磁盘读回，不是内存残留）",
+  t("27 重启后任务还在（从磁盘读回，不是内存残留）",
     tasksAfter.status === 200 && (tasksAfter.body?.tasks ?? []).some((x) => x?.payload?.patientLabel === "本机链路自测"),
     JSON.stringify(tasksAfter.body).slice(0, 160));
   const signedAgain = await (await fetch(`${BASE}/functions/v1/app?action=file-url&docId=${intent.body.docId}`, { headers: { cookie } })).json();
   const backAgain = new Uint8Array(await (await fetch(`${BASE}${signedAgain.url}`, { headers: { cookie } })).arrayBuffer());
-  t("23 重启后原件仍能逐字节取回（对象存储真的落盘）",
+  t("28 重启后原件仍能逐字节取回（对象存储真的落盘）",
     createHash("sha256").update(backAgain).digest("hex") === imageSha, `取回 ${backAgain.byteLength}B`);
 
-  // ── 24～26 三条"配置不对就不起"（宁可不起来，也不带着错配置跑）────────────
+  // ── 29～31 三条"配置不对就不起"（宁可不起来，也不带着错配置跑）────────────
   const repoData = await runOnce(["--port", String(sparePort), "--data", join(ROOT, "e2e-escape-data"), "--passcode", "x"], {});
-  t("24 数据目录指进仓库 ⇒ 拒起服务（退出码 2）：真实病历不许躺在随包外发的面里",
+  t("29 数据目录指进仓库 ⇒ 拒起服务（退出码 2）：真实病历不许躺在随包外发的面里",
     repoData.code === 2 && repoData.out.includes("数据目录在仓库内"), `code=${repoData.code}`);
   const noKey = await runOnce(["--port", String(sparePort), "--data", DATA_DIR, "--passcode", PASSCODE,
     "--ai-endpoint", aiEndpoint, "--key-env", "E2E_LOCAL_MODEL_KEY"], { E2E_LOCAL_MODEL_KEY: "" });
-  t("25 给了端点但环境变量里的 key 是空的 ⇒ 拒起服务（不静默降级成假通路）",
+  t("30 给了端点但环境变量里的 key 是空的 ⇒ 拒起服务（不静默降级成假通路）",
     noKey.code === 2 && noKey.out.includes("拒绝"), `code=${noKey.code}`);
   const httpRemote = await runOnce(["--port", String(sparePort), "--data", DATA_DIR, "--passcode", PASSCODE,
     "--ai-endpoint", "http://example.com/v1/chat/completions", "--key-env", "K"], { K: "x" });
-  t("26 端点校验用的是产品那一条口径：非 https 的公网地址 ⇒ 拒起服务",
+  t("31 端点校验用的是产品那一条口径：非 https 的公网地址 ⇒ 拒起服务",
     httpRemote.code === 2 && httpRemote.out.includes("拒绝"), `code=${httpRemote.code}`);
 
-  // ── 27 限流（最后测：它会挡住后续登录）────────────────────────────────────
+  // ── 32～33 ai-ping 在本机通路上现在给得出读数（R144 之前它只会回 llm_probe_missing：那条通路压根没有探针）
+  const ping32 = await api("ai-ping");
+  const b32 = ping32.body ?? {};
+  t("32 ai-ping：本机通路现在答得出「配没配上」——ok:true・probed:false（这份传输层一个字节都不发）・outcome=config_ok・endpoint 只报形状（回环为真、协议 http）",
+    ping32.status === 200 && b32.ok === true && b32.probed === false && b32.outcome === "config_ok" &&
+      b32.adapter === "cloud-llm" && b32.endpoint?.loopback === true && b32.endpoint?.protocol === "http" &&
+      b32.key?.configured === true && b32.key?.length > 0,
+    JSON.stringify(b32).slice(0, 220));
+  t("33 同一份读数里不许出现端点原文与 key 本体（它会回浏览器，也会进证据件）",
+    !JSON.stringify(b32).includes("://") && !JSON.stringify(b32).includes("e2e-fake-key") &&
+      !Object.keys(b32.endpoint ?? {}).includes("host"),
+    JSON.stringify(b32).slice(0, 160));
+  // ── 34 限流（最后测：它会挡住后续登录）────────────────────────────────────
   let last = null;
   for (let i = 0; i < 10; i += 1) {
     last = await fetch(`${BASE}/__qoder_auth/passcode`, {
@@ -290,7 +364,7 @@ try {
     await last.text();
     if (last.status === 429) break;
   }
-  t("27 连错口令到阈值后回 429（不是可以无限慢慢试）", last?.status === 429, `status=${last?.status}`);
+  t("34 连错口令到阈值后回 429（不是可以无限慢慢试）", last?.status === 429, `status=${last?.status}`);
 } catch (error) {
   console.error(`前置失败：${error?.message ?? error}`);
   exitCode = 2;

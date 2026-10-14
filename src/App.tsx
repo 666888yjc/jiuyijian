@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { StoreProvider, useTask } from "./store";
+import { StoreProvider, useStore, useTask } from "./store";
+import { WRITER_LOCK_BLOCKED, WRITER_LOCK_NOTICE } from "./writerLease";
 import { SyncProvider, useSync, type SyncState } from "./sync";
 import { navigate, useHashPath } from "./router";
 import { splitHashPath } from "./hashQuery";
@@ -193,6 +194,24 @@ function SyncConflictBanner() {
   );
 }
 
+/**
+ * R136（known-issues ⑳ 的③路）：这台设备上另有一个页面持有写权限 ⇒ 这一页只读，必须**当场说出来**。
+ * 两条纪律一起才成立：① 只读不许靠"点了没反应"（R72／R105／R106 那一族），所以被拦下时要补那半句；
+ * ② 这句话不许替别人表态——只说"另一个页面正在核对"与"要改回那一个页面"，不说那边存没存好、也不猜是谁开的。
+ */
+function WriterLockBanner() {
+  const { readOnly, blockedEdits } = useStore();
+  if (!readOnly) return null;
+  return (
+    <div className="no-print mx-auto max-w-4xl px-4 pt-3">
+      <p role="status" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+        {WRITER_LOCK_NOTICE}
+        {blockedEdits > 0 ? `　${WRITER_LOCK_BLOCKED}` : ""}
+      </p>
+    </div>
+  );
+}
+
 function Routes() {
   const path = useHashPath();
   // HE-09：查询串（?field=）与路径分离后再匹配路由，否则 parts[2] 会带上查询串落进 NotFound
@@ -264,6 +283,7 @@ export default function App() {
             </div>
           </header>
           <SyncConflictBanner />
+          <WriterLockBanner />
           <main id="jyj-main" tabIndex={-1} className="mx-auto max-w-4xl px-4 py-6 pb-16">
             <Suspense fallback={<RouteFallback />}>
               <Routes />

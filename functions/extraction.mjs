@@ -268,13 +268,16 @@ export function makeQcaExtractionAdapter({ origin, coordinator, fetchImpl, onUsa
   return {
     name: "qca",
     async ping() {
-      // 诊断用：验证 Function 运行时到 Cloud Agents 的连通与凭据
+      // 诊断用：验证 Function 运行时到 Cloud Agents 的连通与凭据。
+      // R140：这份**真发一次请求**（列 models），所以标 `probed:true`；llm 那份不打对岸、标 `probed:false`。
+      // 两份读数的键集合必须同形（`ok`／`adapter`／`probed`／`outcome`），差别只许在 `probed` 这一格上
+      // 老实表达——不然"两条通路给同一个读数"这句主张就是假的（S3b 立的那条纪律同族）。
       try {
         const result = await client.request("/api/v1/cloud/models");
         const list = Array.isArray(result?.data) ? result.data : Array.isArray(result?.models) ? result.models : Array.isArray(result) ? result : [];
-        return { ok: true, models: list.length, sample: list.slice(0, 8).map((m) => ({ id: m?.id, enabled: m?.enabled !== false })) };
+        return { ok: true, adapter: "qca", probed: true, outcome: "config_ok", models: list.length, sample: list.slice(0, 8).map((m) => ({ id: m?.id, enabled: m?.enabled !== false })) };
       } catch (error) {
-        return { ok: false, code: error?.code ?? "unknown", outcome: error?.outcome ?? "unknown", status: error?.status ?? 0 };
+        return { ok: false, adapter: "qca", probed: true, code: error?.code ?? "unknown", outcome: error?.outcome ?? "unknown", status: error?.status ?? 0 };
       }
     },
     async startJob({ jobId, imageBytes, mediaType }) {
