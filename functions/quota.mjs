@@ -37,8 +37,11 @@ export function makeQuotaGuard({ db, now = () => new Date(), limits = QUOTA_DEFA
         }
         return { allowed: true, used: Number.isFinite(mine) ? mine : 0, limit: limits.ownerPerDay };
       } catch (error) {
+        // 契约（本文件头第 2 条边界 + A 组 R35 判据）：计数读失败就放行——成本护栏不是安全边界，
+        // 不能让一个正在给父亲整理病历的家属因为账本读不出来就识别不了资料；degraded 留痕供观测。
+        // （2026-10-15 门禁抓出此处实现在 fail-closed，与契约相反，已按契约订正。）
         console.warn(`quota_check_degraded:${error?.code ?? "unknown"}`);
-        return { allowed: true, degraded: true, used: 0, limit: limits.ownerPerDay };
+        return { allowed: true, reason: "degraded", degraded: true, used: 0, limit: limits.ownerPerDay };
       }
     },
   };

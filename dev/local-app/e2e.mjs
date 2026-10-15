@@ -36,11 +36,13 @@ const DATA_DIR = resolve(tmpdir(), scopedTempName("jyj-e2e-data", process.pid));
 const PASSCODE = `e2e-${process.pid}`;
 const NOW = "2026-10-03T00:00:00.000Z";
 
-// 端到端要一张图跑真上传＋真识别。完整树里这份合成件在 dev/real-samples/（不随公开仓外发：
-// 导出清单只含产品与本机链路），所以这里用一段确定性的最小 JPEG 现场生成同一职责的测试件——
-// 棋盘格灰度图，内容与任何真实患者无关；假模型按场景回话、不解图，图只承担「上传／取回逐字节一致」
-// 那一类断言，因此字节确定即可复现。
+// 端到端要一张图跑真上传＋真识别。完整树里有一份标 synthetic 的合成件
+// （dev/real-samples/prep/fx-ct-report-20260926.jpg，导出白名单不把它外发给公开仓）；
+// 在就用它，不在（公开仓）就现场生成一段确定性的最小 JPEG——两条路给 e2e 的字节职责相同：
+// 真上传＋真取回逐字节一致。假模型按场景回话、不解图，图只承担那一类断言，因此字节确定即可复现。
+const SYNTHETIC_IMAGE = join(ROOT, "dev/real-samples/prep/fx-ct-report-20260926.jpg");
 function syntheticImage() {
+  if (existsSync(SYNTHETIC_IMAGE)) return new Uint8Array(readFileSync(SYNTHETIC_IMAGE));
   const b64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABQODxIPDRQSEBIXFRQYHjIhHhwcHj0sLiQySUBMS0dARkVQWnNiUFVtVkVGZIhlbXd7gYKBTmCNl4x9lnN+gXz/wAALCACAAGABAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/ALtWbT+P8KsVnVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVX+yf7f6Uf8ev+1u/Cj7X/sfrR9k/2/0o/wCPX/a3fhR9r/2P1o+yf7f6Uf8AHr/tbvwo+1/7H60fZP8Ab/Sj/j1/2t34Ufa/9j9asVXu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arUVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVnVZtP4/wqxVf7J/t/pR/x6/7W78KPtf8AsfrR9k/2/wBKP+PX/a3fhR9r/ANj9aPsn+3+lH/Hr/tbvwo+1/wCx+tH2T/b/AEo/49f9rd+FH2v/AGP1qxVe7/g/Gq1aNV7v+D8arVo1Xu/4PxqtWjVe7/g/Gq1FWbT+P8KsVnVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVX+yf7f6Uf8AHr/tbvwo+1/7H60fZP8Ab/Sj/j1/2t34Ufa/9j9aPsn+3+lH/Hr/ALW78KPtf+x+tH2T/b/Sj/j1/wBrd+FH2v8A2P1qxVe7/g/Gq1aNV7v+D8arVo1Xu/4PxqtWjVe7/g/Gq1FWbT+P8KsVnVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVX+yf7f6Uf8ev+1u/Cj7X/sfrR9k/2/0o/49f8Aa3fhR9r/2P1o+yf7f6Uf8AHr/tbvwo+1/7H60fZP8Ab/Sj/j1/2t34Ufa/9j9asVXu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arVo1Xu/wCD8arUVZtP4/wqxWdVm0/j/CrFZ1WbT+P8KsVnVZtP4/wqxX//2Q==";
   return new Uint8Array(Buffer.from(b64, "base64"));
 }
