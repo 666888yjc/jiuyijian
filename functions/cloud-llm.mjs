@@ -8,7 +8,7 @@
 //     这样两条通路不可能出现"提示词漂移"，A2 那套断言也能对两条通路同时取证。
 //
 // 不可变的东西（改了就回退产品安全属性）：转写纪律、防注入、看不清写「?」、高风险字段清单、证据块回联、上限裁剪。
-import { AGENT_SYSTEM, PROMPT_VERSION, looksLikeRefusal, normalizeResult, parseAgentJson } from "./extraction.mjs";
+import { AGENT_SYSTEM, AGENT_SYSTEM_TEXT, PROMPT_VERSION, PROMPT_VERSION_TEXT, TEXT_USER_TEXT, looksLikeRefusal, normalizeResult, parseAgentJson } from "./extraction.mjs";
 import { CloudAgentsError } from "./cloud-agents.mjs";
 import { causeTag } from "./error-detail.mjs";
 
@@ -119,23 +119,28 @@ export function makeCloudLlmExtractionAdapter({
       };
     },
 
-    async startJob({ jobId, imageBytes, mediaType }) {
+    async startJob({ jobId, imageBytes, mediaType, text }) {
       const startedAt = now();
-      const sessionId = `llm:${jobId}`;
+      // 模式标记进 session_id（不新增 job 列）：extract-status 靠它给作业盖对的版本戳——
+      // 文字层作业盖 extract-text-v1，图片作业盖 extract-v4，审计凭据不能张冠李戴。
+      const isText = typeof text === "string" && text.trim().length > 0;
+      const sessionId = `${isText ? "llm-text" : "llm"}:${jobId}`;
       const body = {
         model,
         stream: true,                                  // 该 API 只支持流式；不传会被 SDK 直接拒发
         stream_options: { include_usage: true },       // 末尾 usage 带 credit，成本可观测
         temperature,
         messages: [
-          { role: "system", content: AGENT_SYSTEM },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: USER_TEXT },
-              { type: "image_url", image_url: { url: `data:${mediaType};base64,${b64(imageBytes)}` } },
-            ],
-          },
+          { role: "system", content: isText ? AGENT_SYSTEM_TEXT : AGENT_SYSTEM },
+          isText
+            ? { role: "user", content: [{ type: "text", text: `${TEXT_USER_TEXT}\n\n${text}` }] }
+            : {
+                role: "user",
+                content: [
+                  { type: "text", text: USER_TEXT },
+                  { type: "image_url", image_url: { url: `data:${mediaType};base64,${b64(imageBytes)}` } },
+                ],
+              },
         ],
       };
       let outcome;
@@ -208,7 +213,9 @@ export function makeCloudLlmExtractionAdapter({
     },
 
     async pollJob({ sessionId }) {
-      const jobId = typeof sessionId === "string" && sessionId.startsWith("llm:") ? sessionId.slice(4) : null;
+      // 两种前缀都认：llm:（图片）与 llm-text:（PDF 文字层）。剥前缀取 jobId 的逻辑只有一处。
+      const m = /^llm(?:-text)?:(.+)$/.exec(typeof sessionId === "string" ? sessionId : "");
+      const jobId = m ? m[1] : null;
       const local = sessions.get(sessionId);
       if (local) {
         if (local.status === "completed") return { status: "completed", result: local.result };
@@ -221,8 +228,9 @@ export function makeCloudLlmExtractionAdapter({
       return { status: "failed", code: "ai_result_lost" };
     },
 
-    modelVersion(modelId) {
-      return `${PROMPT_VERSION}|${modelId ?? model}`;
+    modelVersion(modelId, mode = "image") {
+      // 文字层通路有它自己的版本戳：两条通路的提示词不同，审计凭据必须能区分是哪一份产出的字段。
+      return `${mode === "text" ? PROMPT_VERSION_TEXT : PROMPT_VERSION}|${modelId ?? model}`;
     },
   };
 }

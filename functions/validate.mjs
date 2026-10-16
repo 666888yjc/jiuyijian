@@ -24,6 +24,9 @@ export const UPLOAD_MIMES = new Map([
 export const EXTRACT_MIMES = new Set(["image/jpeg", "image/png"]);
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const MAX_EXTRACT_IMAGE_BYTES = 680 * 1024;
+// 文字层通路（数字版 PDF）的载荷上限：按**字符**计（UTF-8 之前），60,000 字符约 180KB，
+// 远在 readJson 的 1.6MB 身体上限之内；一份几十页的出院小结文字层也够用，超了让前端分页送。
+export const MAX_EXTRACT_TEXT_CHARS = 60_000;
 const OBJECT_PATH = /^docs\/[0-9a-f]{16}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|pdf)$/;
 
 const bad = () => new DbError("invalid_payload", 400);

@@ -277,6 +277,37 @@ export function DocsPage({ task }: { task: VisitTask }) {
     return { file: fitted.file, compressedCopy: true, notice: compressedNotice(fitted.originalBytes, fitted.storedBytes) };
   }
 
+  /**
+   * PDF 文字层通路（2026-10-15）：数字版 PDF 解析出文字层，整份送云端识别——比把每页渲染成图
+   * 更准也更便宜。扫描版没有文字层，如实告知走人工录入，不猜、不假装识别过。
+   * 取回的是云端存储里那份原件（签名地址），与图片通路同一个出口（R78 那条纪律）；
+   * 解析失败（加密/损坏）的文案走 pdfErrors 那一套，不在这里另造一句。
+   */
+  async function handleExtractPdf(doc: SourceDocument) {
+    const retrying = jobs[doc.id]?.phase === "failed";
+    setJob(doc.id, { phase: "extracting" });
+    try {
+      if (retrying) await api.aiRepair().catch(() => {});
+      const { url } = await fetchFreshFileUrl(doc.id);
+      const blob = await (await fetch(url, { credentials: "same-origin" })).blob();
+      const mod = await import("../pdf");
+      const parsed = await mod.parsePdf(await blob.arrayBuffer());
+      const text = parsed.pages.map((p) => p.blocks.map((b) => b.text).join("\n")).join("\n\n");
+      if (!text.trim()) {
+        // 扫描版 PDF：没有文字层可送。诚实失败，不落到"发出去了但识别不出"。
+        setJob(doc.id, { phase: "failed", message: "pdf_no_text_layer" });
+        return;
+      }
+      const { jobId } = await api.extractStartText(doc.id, text);
+      // 先落到本页之外的登记处，再开始轮询：循环会随组件卸载而死，凭据不会（R69）
+      rememberExtract(task.id, doc.id, jobId);
+      dispatch({ type: "audit.push", taskId: task.id, audit: makeAudit("extract.start", `「${doc.name}」发起云端识别（PDF 文字层，${parsed.pages.length} 页）`) });
+      void pollExtract(doc.id, jobId);
+    } catch (error) {
+      setJob(doc.id, { phase: "failed", message: error instanceof ApiError ? error.detail || error.code : "识别发起失败" });
+    }
+  }
+
   async function handleFiles(files: FileList, replaceDocId?: string) {
     for (const picked of Array.from(files)) {
       const fitted = await fitPickedFile(picked);
@@ -514,7 +545,13 @@ export function DocsPage({ task }: { task: VisitTask }) {
                       {job?.phase === "failed" ? "重试识别" : "识别此资料"}
                     </Button>
                   )}
-                  {doc.objectPath && !isImage && (
+                  {/* PDF 文字层通路（云端模式）：数字版 PDF 送文字层识别；本机模式的资料不落对象存储，没有原件可取 */}
+                  {doc.objectPath && !isImage && serverUpload && job?.phase !== "extracting" && (
+                    <Button variant="outline" size="sm" onClick={() => handleExtractPdf(doc)}>
+                      {job?.phase === "failed" ? "重试识别" : "识别此资料"}
+                    </Button>
+                  )}
+                  {doc.objectPath && !isImage && !serverUpload && (
                     <span className="text-xs text-muted-foreground">PDF 自动识别开发中，可手工录入</span>
                   )}
                   <Button variant="ghost" size="sm" onClick={() => { setReplacingId(doc.id); inputRef.current?.click(); }}>

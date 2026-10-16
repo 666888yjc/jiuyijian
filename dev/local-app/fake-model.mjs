@@ -9,10 +9,10 @@
 // 用法：node dev/local-app/fake-model.mjs [port=5599]
 import { createServer } from "node:http";
 import { createFakeLlmHandler } from "../fake-llm/handler.mjs";
-import { AGENT_SYSTEM } from "../../functions/extraction.mjs";
+import { AGENT_SYSTEM, AGENT_SYSTEM_TEXT } from "../../functions/extraction.mjs";
 
 const PORT = Number(process.argv[2] || 5599);
-const fake = createFakeLlmHandler({ getSystemPrompt: () => AGENT_SYSTEM });
+const fake = createFakeLlmHandler({ getSystemPrompt: () => AGENT_SYSTEM, getTextSystemPrompt: () => AGENT_SYSTEM_TEXT });
 // 本机自证用的小开关：那份夹具按请求头 `x-fake-scenario` 选剧本，而真实传输层不会带这种头。
 // 所以这里允许把"下一单用什么剧本"设成默认值并替它把头补上——只影响这台假服务自己。
 let forcedScenario = "";

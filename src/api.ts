@@ -123,6 +123,14 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ docId, mediaType, imageBase64 }),
     }) as Promise<{ jobId: string }>,
+  // PDF 文字层通路：数字版 PDF 解析出的文字整份送识别（比图片 OCR 准且便宜）；
+  // 扫描版没有文字层，前端解析后走 pdf_no_text_layer 告知，不会到这里。
+  extractStartText: (docId: string, text: string) =>
+    requestJson(q("extract-start"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ docId, mediaType: "application/pdf", text }),
+    }) as Promise<{ jobId: string }>,
   aiRepair: () =>
     requestJson(q("ai-repair"), { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }),
   extractStatus: (jobId: string) =>

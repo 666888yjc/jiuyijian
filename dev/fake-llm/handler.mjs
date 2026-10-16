@@ -5,9 +5,10 @@
 //
 // 它会主动核验请求形状，形状不对就 400 —— 于是"提示词被改动""忘了 stream""图片没带上"
 // 这类事故会让断言当场转红，而不是悄悄通过：
-//   · messages[0] 必须是 system 且 content **逐字等于**产品的 AGENT_SYSTEM
+//   · messages[0] 必须是 system；**有图**时 content 逐字等于产品的 AGENT_SYSTEM，
+//     **无图**（PDF 文字层通路）时逐字等于 AGENT_SYSTEM_TEXT——两条通路各用各的尺子
 //   · 必须 stream:true（真 SDK 不传就直接拒发）
-//   · 必须带 image_url 的 data: URL
+//   · 有图时必须带 image_url 的 data: URL；无图时文字必须非空
 // 注入开关（POST /_fake/declare 或内置名）：正常 JSON / 围栏 / 非 JSON / 拒答 / 空 / 永不回话 / 慢流 / HTTP 错误。
 import { FAKE_SCENARIOS } from "../fake-ocr/handler.mjs";
 
@@ -26,9 +27,9 @@ export const FAKE_LLM_TRANSPORTS = { ...FAKE_SCENARIOS, never: () => null };
 export const FAKE_LLM_NAMES = Object.keys(FAKE_LLM_TRANSPORTS);
 
 /**
- * @param {{ getSystemPrompt: () => string, model?: string }} expectations
+ * @param {{ getSystemPrompt: () => string, getTextSystemPrompt?: () => string, model?: string }} expectations
  */
-export function createFakeLlmHandler({ getSystemPrompt, model = "deepseek-v4.1-flash" } = {}) {
+export function createFakeLlmHandler({ getSystemPrompt, getTextSystemPrompt, model = "deepseek-v4.1-flash" } = {}) {
   const state = {
     declared: new Map(),
     defaultScenario: "report",
@@ -93,14 +94,33 @@ export function createFakeLlmHandler({ getSystemPrompt, model = "deepseek-v4.1-f
 
     if (body?.stream !== true) { state.stats.streamFlagMissing += 1; json(res, 400, { error: { message: "request_stream_required" } }); return true; }
     const sys = body?.messages?.[0];
-    if (!sys || sys.role !== "system" || sys.content !== getSystemPrompt()) {
-      state.stats.promptMismatch += 1;
-      json(res, 400, { error: { message: "system_prompt_mismatch", got: typeof sys?.content === "string" ? sys.content.slice(0, 60) : null } });
-      return true;
-    }
     const parts = Array.isArray(body?.messages?.[1]?.content) ? body.messages[1].content : [];
     const image = parts.find((p) => p?.type === "image_url");
-    if (!image?.image_url?.url?.startsWith("data:image/")) { state.stats.imageMissing += 1; json(res, 400, { error: { message: "image_part_missing" } }); return true; }
+    if (image) {
+      // 图片通路：system 逐字等于 AGENT_SYSTEM，且必须带 data:image/ 的图
+      if (!sys || sys.role !== "system" || sys.content !== getSystemPrompt()) {
+        state.stats.promptMismatch += 1;
+        json(res, 400, { error: { message: "system_prompt_mismatch", got: typeof sys?.content === "string" ? sys.content.slice(0, 60) : null } });
+        return true;
+      }
+      if (!image?.image_url?.url?.startsWith("data:image/")) { state.stats.imageMissing += 1; json(res, 400, { error: { message: "image_part_missing" } }); return true; }
+    } else {
+      // 文字层通路（PDF）：system 逐字等于 AGENT_SYSTEM_TEXT，且文字非空。
+      // 没注 getTextSystemPrompt 的调用方（旧注入点）在这一律 400——宁可红，不静默放行。
+      if (typeof getTextSystemPrompt !== "function") {
+        state.stats.promptMismatch += 1;
+        json(res, 400, { error: { message: "text_mode_not_supported" } });
+        return true;
+      }
+      if (!sys || sys.role !== "system" || sys.content !== getTextSystemPrompt()) {
+        state.stats.promptMismatch += 1;
+        json(res, 400, { error: { message: "system_prompt_mismatch", mode: "text", got: typeof sys?.content === "string" ? sys.content.slice(0, 60) : null } });
+        return true;
+      }
+      const text = parts.map((p) => (p?.type === "text" ? String(p.text ?? "") : "")).join("");
+      if (!text.trim()) { state.stats.imageMissing += 1; json(res, 400, { error: { message: "text_part_missing" } }); return true; }
+      state.stats.textRequests = (state.stats.textRequests ?? 0) + 1;
+    }
 
     const scenarioName = req.headers["x-fake-scenario"] || state.defaultScenario;
     const sc = resolve(String(Array.isArray(scenarioName) ? scenarioName[0] : scenarioName)) ?? resolve("report");

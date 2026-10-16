@@ -10,7 +10,7 @@ import { makeCoordinator } from "./coordinator.mjs";
 import { makeQuotaGuard, QUOTA_DEFAULTS } from "./quota.mjs";
 import {
   readJson, sanitizeTaskPayload, uuid,
-  UPLOAD_MIMES, EXTRACT_MIMES, MAX_UPLOAD_BYTES, MAX_EXTRACT_IMAGE_BYTES,
+  UPLOAD_MIMES, EXTRACT_MIMES, MAX_UPLOAD_BYTES, MAX_EXTRACT_IMAGE_BYTES, MAX_EXTRACT_TEXT_CHARS,
 } from "./validate.mjs";
 
 const json = (value, status = 200) =>
@@ -225,18 +225,34 @@ export function createHandler({ storage, extract, quotaLimits = null, modelKind 
 
       if (action === "extract-start" && method === "POST") {
         const body = await readJson(request, 1_600_000);
-        if (!uuid(body?.docId) || !EXTRACT_MIMES.has(body?.mediaType)) return fail("invalid_payload");
+        // ── 两条取 Payload 的路：图片（jpg/png）与文字层（数字版 PDF 解析出的文字） ──────────
+        // 文字层通路：出院小结一类的资料大量是数字版 PDF，有文字层就比图片 OCR 更准也更便宜；
+        // 扫描版 PDF 没有文字层，仍走图片通路（前端先把页渲染成图）。两条路共用后面的
+        // 幂等／配额／派发／轮询／合并全部机制，只在这一段分叉。
+        const isText = body?.mediaType === "application/pdf" && typeof body?.text === "string" && body.text.trim().length > 0;
+        if (!uuid(body?.docId)) return fail("invalid_payload");
+        if (isText) {
+          if (body.text.length > MAX_EXTRACT_TEXT_CHARS) return fail("extract_text_invalid", 422);
+        } else if (!EXTRACT_MIMES.has(body?.mediaType)) {
+          return fail("invalid_payload");
+        }
         const row = await db.getDoc(body.docId, ownerId);
         if (!row || row.state !== "stored") return fail("not_found", 404);
-        if (!EXTRACT_MIMES.has(row.mime)) return fail("extract_unsupported_type", 422);
-        const bytes = decodeBase64(body?.imageBase64);
-        if (!bytes || bytes.length < 64 || bytes.length > MAX_EXTRACT_IMAGE_BYTES) return fail("extract_image_invalid", 422);
-        // ── 幂等：同一份资料 + 同一张图 + 同一版提示词 + 同一个模型 ⇒ 同一个 jobId ──────────
+        if (isText) {
+          if (row.mime !== "application/pdf") return fail("extract_unsupported_type", 422);
+        } else if (!EXTRACT_MIMES.has(row.mime)) {
+          return fail("extract_unsupported_type", 422);
+        }
+        const bytes = isText ? null : decodeBase64(body?.imageBase64);
+        if (!isText && (!bytes || bytes.length < 64 || bytes.length > MAX_EXTRACT_IMAGE_BYTES)) return fail("extract_image_invalid", 422);
+        // ── 幂等：同一份资料 + 同一份 Payload（图或文字）+ 同一版提示词 + 同一个模型 ⇒ 同一个 jobId ──
         // 防的是真实场景：用户连点两次「识别此资料」、或前端超时后自己再发一次——每次都是几毛钱积分
         // 与 8–12 秒等待，而且第二次的结果会盖掉第一次，家属看到字段跳动。
         // 不加列、不做迁移：jobId 由键算出来，靠主键唯一性天然去重；失败的键换一次 attempt 号重来。
-        const versionTag = String(adapter.modelVersion?.(adapter.model ?? null) ?? "unknown");
-        const idKey = await hexDigest(`${row.id}|${body.mediaType}|${versionTag}|${await hexDigest(body.imageBase64)}`);
+        // 文字层与图片的键天然分开（媒体类型那一格写 "text"），同一份 PDF 两条路不会互相顶。
+        const versionTag = String(adapter.modelVersion?.(adapter.model ?? null, isText ? "text" : "image") ?? "unknown");
+        const payloadDigest = await hexDigest(isText ? body.text : String(body?.imageBase64 ?? ""));
+        const idKey = await hexDigest(`${row.id}|${isText ? "text" : body.mediaType}|${versionTag}|${payloadDigest}`);
         let jobId = null;
         let reused = null;
         let lastFailedCause = "";
@@ -283,7 +299,9 @@ export function createHandler({ storage, extract, quotaLimits = null, modelKind 
           return ok({ jobId, idempotent: reused.state ?? "pending" });
         }
         try {
-          const { sessionId, modelId } = await adapter.startJob({ jobId, imageBytes: bytes, mediaType: body.mediaType });
+          const { sessionId, modelId } = isText
+            ? await adapter.startJob({ jobId, text: body.text })
+            : await adapter.startJob({ jobId, imageBytes: bytes, mediaType: body.mediaType });
           await db.updateJob(jobId, ownerId, { session_id: sessionId, model_id: modelId, state: "dispatched" });
           return ok({ jobId });
         } catch (error) {
@@ -301,8 +319,20 @@ export function createHandler({ storage, extract, quotaLimits = null, modelKind 
         if (!uuid(url.searchParams.get("jobId"))) return fail("invalid_payload");
         const job = await db.getJob(url.searchParams.get("jobId"), ownerId);
         if (!job) return fail("not_found", 404);
+        // 作业走的是哪条通路（图片／PDF 文字层）决定盖哪个版本戳。llm 通路的 session_id 带前缀
+        // （llm-text:／llm:），权威且零额外查询；QCA 通路的 session_id 是平台 opaque id，
+        // 按资料 mime 推定——当前前端只对 PDF 走文字层通路，若将来扫描版 PDF 也走"渲染成图"的
+        // 图片通路，这个推定要换成 job 行上的显式模式列（那时补迁移）。
+        const sid = String(job.session_id ?? "");
+        let jobMode = "image";
+        if (sid.startsWith("llm-text:")) jobMode = "text";
+        else if (sid.startsWith("llm:")) jobMode = "image";
+        else {
+          const docRow = await db.getDoc(job.doc_id, ownerId);
+          jobMode = docRow?.mime === "application/pdf" ? "text" : "image";
+        }
         if (job.state === "completed") {
-          return ok({ state: "completed", result: job.result, modelVersion: adapter.modelVersion(job.model_id), modelKind });
+          return ok({ state: "completed", result: job.result, modelVersion: adapter.modelVersion(job.model_id, jobMode), modelKind });
         }
         if (job.state === "failed") return ok({ state: "failed", code: job.error_code ?? "ai_service_unavailable" });
         // 卡死上限由 adapter 自己报（同步通路 90 秒级，QCA 沿用 10 分钟）：
@@ -315,7 +345,7 @@ export function createHandler({ storage, extract, quotaLimits = null, modelKind 
           const polled = await adapter.pollJob({ sessionId: job.session_id });
           if (polled.status === "completed") {
             await db.updateJob(job.id, ownerId, { state: "completed", result: polled.result, model_id: job.model_id ?? null });
-            return ok({ state: "completed", result: polled.result, modelVersion: adapter.modelVersion(job.model_id), modelKind });
+            return ok({ state: "completed", result: polled.result, modelVersion: adapter.modelVersion(job.model_id, jobMode), modelKind });
           }
           if (polled.status === "failed") {
             await db.updateJob(job.id, ownerId, { state: "failed", error_code: polled.code });

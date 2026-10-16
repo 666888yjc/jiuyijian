@@ -150,6 +150,64 @@ check("13 doc-delete 成功", dd1.status === 200 && dd1.body.ok === true, err(dd
 const fu2 = await get(`file-url&docId=${i1.body.docId}`);
 check("14 删除后 file-url 404", fu2.status === 404, err(fu2));
 
+// ---------- 1b. PDF 文字层通路（数字版 PDF 送文字识别，2026-10-15） ----------
+// 与图片通路共用幂等/配额/轮询/合并；这一段只取文字层通路自己的形状：mime 闸门、
+// 文字层版本戳、幂等复用、超长拒绝、图片资料不许走文字层。
+const i2 = await uploadIntent(NEW_TASK, 300, "A", "r.pdf", "application/pdf");
+check("14b upload-intent 接受 application/pdf", i2.status === 200 && /\.pdf$/.test(i2.body.objectPath ?? ""), err(i2));
+
+const put2 = await putBytes(i2.body.signedUrl, new Uint8Array(300).fill(65), "application/pdf");
+check("14c PUT PDF 成功", put2.status === 200, `status=${put2.status}`);
+
+const c2 = await call("upload-complete", { docId: i2.body.docId });
+check("14d upload-complete PDF", c2.status === 200 && c2.body.size === 300, JSON.stringify(c2.body));
+
+const t2b = await payloadOf(NEW_TASK, basePayload({ documents: [docOf(i2.body)] }));
+check("14e task-save 带 PDF 引用", t2b.status === 200 && t2b.body.ok === true, err(t2b));
+
+const PDF_TEXT = [
+  "虚构第一人民医院 出院小结",
+  "姓名：张××  性别：女  年龄：54岁",
+  "入院日期：2026.9.10   出院日期：2026.9.15",
+  "出院诊断：胆囊结石伴慢性胆囊炎",
+  "出院带药：1. 消炎利胆片  口服  一次6片  一日3次",
+  "          2. 头孢克肟分散片 0.1g  口服  一日2次",
+  "过敏史：青霉素过敏",
+  "医师签名：李××",
+].join("\n");
+const xt = await call("extract-start", { docId: i2.body.docId, mediaType: "application/pdf", text: PDF_TEXT });
+check("14f extract-start 文字层返回 jobId", xt.status === 200 && !!xt.body.jobId, err(xt));
+
+let pollT = null;
+for (let i = 1; i <= 3; i++) {
+  pollT = await get(`extract-status&jobId=${xt.body.jobId}`);
+  if (pollT.body?.state === "completed") break;
+}
+check("14g 文字层识别 completed、字段带回、版本戳是文字层那一版",
+  pollT.body?.state === "completed"
+  && (pollT.body.result?.fields ?? []).length === 3
+  && String(pollT.body.modelVersion ?? "").startsWith("jiuyijian-extract-text-v1|"),
+  JSON.stringify(pollT.body).slice(0, 240));
+
+const xt2 = await call("extract-start", { docId: i2.body.docId, mediaType: "application/pdf", text: PDF_TEXT });
+check("14h 同一份文字重复发起走幂等复用（不烧第二次）",
+  xt2.status === 200 && xt2.body.jobId === xt.body.jobId && xt2.body.idempotent === "completed",
+  JSON.stringify(xt2.body).slice(0, 200));
+
+const xtBig = await call("extract-start", { docId: i2.body.docId, mediaType: "application/pdf", text: "字".repeat(60001) });
+check("14i 文字层超长 422 extract_text_invalid", xtBig.status === 422 && xtBig.body.error === "extract_text_invalid", err(xtBig));
+
+const xtNoText = await call("extract-start", { docId: i2.body.docId, mediaType: "application/pdf", text: "   " });
+check("14j 空文字不构成文字层通路（回落图片校验 ⇒ invalid_payload）",
+  xtNoText.status === 400 && xtNoText.body.error === "invalid_payload", err(xtNoText));
+
+const i3 = await uploadIntent(NEW_TASK, 120, "A", "t2.jpg", "image/jpeg");
+await putBytes(i3.body.signedUrl, bytes);
+await call("upload-complete", { docId: i3.body.docId });
+const xtWrong = await call("extract-start", { docId: i3.body.docId, mediaType: "application/pdf", text: PDF_TEXT });
+check("14k 图片资料走文字层通路被拒 422 extract_unsupported_type",
+  xtWrong.status === 422 && xtWrong.body.error === "extract_unsupported_type", err(xtWrong));
+
 // 后续各节需要一个长期有效的已存文档引用（doc-delete 会把引用它的载荷清掉，不能复用 i1）
 const ref = setup("upload-intent（后续引用基准）", await uploadIntent(NEW_TASK, 120));
 await putBytes(ref.signedUrl, bytes);

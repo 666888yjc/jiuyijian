@@ -24,7 +24,7 @@ const { makeUsageLedger, usageKeyFor } = await import("../../functions/usage-led
 // llm 通路必须能被同一套 A2 断言跑绿，否则不许替换线上通道）。
 const { createFakeOcrHandler } = await import("../fake-ocr/handler.mjs");
 const { createFakeLlmHandler } = await import("../fake-llm/handler.mjs");
-const { CLOUD_AGENTS_ORIGIN, PROMPT_VERSION, AGENT_SYSTEM } = await
+const { CLOUD_AGENTS_ORIGIN, PROMPT_VERSION, AGENT_SYSTEM, AGENT_SYSTEM_TEXT } = await
   import("../../functions/extraction.mjs");
 // 适配器装配走产品那一份（functions/adapters.mjs）：夹具不再自己拼 createHandler 的参数，
 // 因此"生产接了、夹具漏接"这类漂移在结构上不可能再发生（R35 撞过的洞）。
@@ -58,7 +58,7 @@ const resetActionCounts = () => { for (const k of Object.keys(actionCounts)) del
 const fakeOcr = createFakeOcrHandler();
 // llm 通路（JYJ_EXTRACT_ADAPTER=llm）用这个假多模态 LLM：OpenAI 兼容 SSE，形状不对直接 400，
 // 于是"提示词被改""忘传 stream""图片没带上"都会让断言当场转红。
-const fakeLlm = createFakeLlmHandler({ getSystemPrompt: () => AGENT_SYSTEM });
+const fakeLlm = createFakeLlmHandler({ getSystemPrompt: () => AGENT_SYSTEM, getTextSystemPrompt: () => AGENT_SYSTEM_TEXT });
 // FAKE_OCR_URL 指到独立进程（node dev/fake-ocr/server.mjs 5000）时用它；默认挂在夹具自己的端口上，
 // 这样「一条命令」就能跑完整链路，且传输层仍是真实 HTTP（走 127.0.0.1 回环，不外发一个包）。
 const FAKE_OCR_BASE = process.env.FAKE_OCR_URL || `http://127.0.0.1:${PORT}`;
@@ -182,6 +182,7 @@ const llmFetchImpl = async (target, init) => {
     // 这个字段进流水（`/_fixture/state` 的 transcript），跑完能当场数出 4 次请求各带多少。
     temperature: body?.temperature ?? null,
     systemIsProductPrompt: body?.messages?.[0]?.content === AGENT_SYSTEM,
+    systemIsProductTextPrompt: body?.messages?.[0]?.content === AGENT_SYSTEM_TEXT,
     hasImage: Array.isArray(body?.messages?.[1]?.content) && body.messages[1].content.some((p) => p?.type === "image_url"),
   };
   if (entry.proxiedTo !== new URL(LLM_TARGET).origin) {
