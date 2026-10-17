@@ -290,8 +290,11 @@ export function DocsPage({ task }: { task: VisitTask }) {
       if (retrying) await api.aiRepair().catch(() => {});
       const { url } = await fetchFreshFileUrl(doc.id);
       const blob = await (await fetch(url, { credentials: "same-origin" })).blob();
+      // 先给"正在解析"的即时反馈，再动态 import 解析器：首次加载解析器有耗时，不许有静默窗口（HE-02）
+      setParsing(doc.name);
       const mod = await import("../pdf");
       const parsed = await mod.parsePdf(await blob.arrayBuffer());
+      setParsing(null);
       const text = parsed.pages.map((p) => p.blocks.map((b) => b.text).join("\n")).join("\n\n");
       if (!text.trim()) {
         // 扫描版 PDF：没有文字层可送。诚实失败，不落到"发出去了但识别不出"。
@@ -304,6 +307,7 @@ export function DocsPage({ task }: { task: VisitTask }) {
       dispatch({ type: "audit.push", taskId: task.id, audit: makeAudit("extract.start", `「${doc.name}」发起云端识别（PDF 文字层，${parsed.pages.length} 页）`) });
       void pollExtract(doc.id, jobId);
     } catch (error) {
+      setParsing(null);
       setJob(doc.id, { phase: "failed", message: error instanceof ApiError ? error.detail || error.code : "识别发起失败" });
     }
   }

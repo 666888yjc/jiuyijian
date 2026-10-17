@@ -274,9 +274,12 @@ try {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenario: name }),
   })).status;
   const modelCount = async () => (await (await fetch("http://127.0.0.1:" + modelPort + "/_fake/state")).json().catch(() => null)) ?? {};
-  const jobsOnDisk = async (docId, limit = 20) => {
+  const jobsOnDisk = async (docId, limit = 50) => {
     // 落盘是**去抖**写的（scheduleFlush 120ms），而建行的那一刻与"失败回写"是两笔：读到"建行后、回写前"那份快照就会看见一条 pending。
     // 所以要等到**这一批都落成终态**再判（R74 那条老纪律：不记得≠没有，没等够≠没发生）；等不到就用最后读到的那份去判——真卡住仍然会红，不会被掩盖。
+    // 窗口取 50×200ms＝10s：单跑几百毫秒就落定，这道余量是给**整机重载**留的——完整 logic.test 会连起多个子进程，
+    //   去抖写盘被拉长，4s 老窗口会偶发读到 pending 行让 test 25 假红（2026-10-16 实测：干净环境下也间歇复犯，
+    //   是真实负载时序，不是环境注入噪音）。加宽不放松判据——落不成终态照样红，只是不再把"慢"误报成"产品坏"。
     const file = join(DATA_DIR, "tables.json");
     let rows = [];
     for (let i = 0; i < limit; i += 1) {
