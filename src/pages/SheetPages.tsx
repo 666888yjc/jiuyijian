@@ -322,6 +322,10 @@ export function SheetPrintPage({ task }: { task: VisitTask }) {
                     />
                     <Label htmlFor={`exp-${i.fieldId}`} className="font-normal">
                       {i.label}：{i.value}
+                      {/* R153（R116 登记的 (b) 格定稿为「修」）：导出勾选是**决策面**——同项两行
+                          （血肌酐 118.0／125.0）在这里决定谁进那张纸，掉队的那一面让人分不出在排除哪一行。
+                          句子就是条目自带的 dateNote（itemLedger 那一句，编辑页与纯文本导出早就带着它），不另拼。 */}
+                      {i.dateNote && <span className="ml-1 text-xs font-normal text-muted-foreground">{i.dateNote}</span>}
                     </Label>
                   </li>
                 ))}
