@@ -10,7 +10,12 @@ a476e41f08b9de5b  components/ui/label.tsx
 c8c26e8f5f041c3c  components/ui/progress.tsx
 0b796a108a4eb5ba  components/ui/select.tsx
 253cdeb487c73bea  components/ui/textarea.tsx
+7b81007ddcc2d26c  dev/cloud-app/smoke-tcb.mjs
+0ad112e24dec9291  dev/cloud-app/tcb-app.mjs
+75bed0d74f603d8a  dev/cloud-app/tcb-db.mjs
+d6dd4d52f805702f  dev/cloud-app/tcb-storage.mjs
 16819e31a8cc5d1c  dev/pkg-hygiene-core.mjs
+d1b236db52577ec3  dev/tcb-deploy/stage.mjs
 8457108f32724bce  dev\api-fixture\server.mjs
 413bc8017561b051  dev\api-fixture\smoke.mjs
 b5e1a5bc121b37c0  dev\backend-local\object-store.mjs
