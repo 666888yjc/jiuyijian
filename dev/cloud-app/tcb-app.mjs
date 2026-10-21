@@ -125,7 +125,10 @@ const business = createHandler({
   extract: extraction,
   quotaLimits: { ...QUOTA_DEFAULTS },
   modelKind,
-  // cloud-llm 直连 extract_jobs 的那两处，桥到 TCB 适配器（同一接口，无第二套查询语言）
+  // db 注入点：handler 默认会拿 supabase 自己造 db（PostgREST 形状），CloudBase 这边没有那种
+  // 客户端——注入 makeDbTcb（同一接口的 NoSQL 实现）。supabase 仍要传：cloud-llm 适配器
+  // 直连 extract_jobs 的那两处走它（makeJobsSupabaseShim 只认这一张表）。
+  db,
   ...({ supabase: makeJobsSupabaseShim(db) }),
 });
 
@@ -139,9 +142,46 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
   const path = url.pathname;
   try {
-    if (path === "/_tcb/state") {
+    // /_tcb/state 是本机/harness 的形状；/state 是部署诊断用的别名——网关拒收下划线开头的
+    // 公网路径（实测 443），所以线上探针走 /state（诊断路由用完即删）。
+    if (path === "/_tcb/state" || path === "/state") {
+      // DB 探针（2026-10-19 冒烟时加的运维仪表）：健康端点本来就该报数据库可达性。
+      // 走**原始** app.database()（不过适配器的包装）——要的就是没被翻译过的错误本身。
+      let dbProbe;
+      try {
+        const raw = app.database();
+        const r = await raw.collection("jyj_tasks").where({ owner_id: "probe" }).limit(1).get();
+        dbProbe = { ok: true, matched: (r.data ?? []).length };
+        // 写探针：add→remove 往返，把写侧错误原样逼出来（2026-10-19：读通写不通，没有它就是瞎子）
+        try {
+          const added = await raw.collection("jyj_tasks").add({ owner_id: "probe", kind: "state-probe", at: new Date().toISOString() });
+          const newId = added?.id ?? added?.ids?.[0] ?? "";
+          await raw.collection("jyj_tasks").where({ _id: newId }).remove();
+          dbProbe.write = { ok: true };
+        } catch (werr) {
+          dbProbe.write = { ok: false, name: String(werr?.name ?? ""), code: String(werr?.code ?? ""), message: String(werr?.message ?? werr).slice(0, 300) };
+        }
+        // 适配器探针：冒烟挂在适配器层（task-save 走 db.insertTask），裸 SDK 通不代表适配器通——
+        // 直接用 makeDbTcb 的那套方法跑一遍，错误连「是不是 DbError」一起报。
+        try {
+          const probeId = "dddddddd-d0d0-4d0d-8d0d-d0d0d0d0d0d0";
+          await db.insertTask({ id: probeId, owner_id: "probe", payload: { patientLabel: "state-probe" }, updated_at: new Date().toISOString() });
+          const back = await db.getTask(probeId, "probe");
+          await db.deleteTask(probeId, "probe");
+          dbProbe.adapter = { ok: true, readBack: Boolean(back?.id) };
+        } catch (aerr) {
+          dbProbe.adapter = {
+            ok: false, isDbError: aerr instanceof Error && typeof aerr.code === "string" && typeof aerr.status === "number",
+            name: String(aerr?.name ?? ""), code: String(aerr?.code ?? ""), status: aerr?.status ?? null,
+            message: String(aerr?.message ?? aerr).slice(0, 300),
+          };
+        }
+      } catch (error) {
+        dbProbe = { ok: false, name: String(error?.name ?? ""), code: String(error?.code ?? ""), message: String(error?.message ?? error).slice(0, 300) };
+      }
       json(res, 200, {
         ok: true,
+        db: dbProbe,
         modelKind,
         ai: aiSummary,
         quota: { ...QUOTA_DEFAULTS },

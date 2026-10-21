@@ -6,6 +6,7 @@
 // 明确**不**带：index.ts（Qoder Deno 入口，已退役；它带 npm: 前缀说明符，Node 侧不认）、
 //              node_modules（沙箱自己装）、docs/、dev/regression/、任何 .json 证据件。
 import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
 import { homedir } from "node:os";
 
@@ -40,6 +41,19 @@ writeFileSync(join(OUT, "package.json"), `${JSON.stringify({
 // 4b) scf_bootstrap：SCF 自定义运行时的入口（与 jlau-ai-assistant 同 env 同款形状：不传 handler，
 //     平台跑这个脚本；应用自己听 PORT||9000）。exec 让信号直达 node，收停时能把落盘队列冲完。
 writeFileSync(join(OUT, "scf_bootstrap"), "#!/bin/bash\nexec node dev/cloud-app/tcb-app.mjs\n", { mode: 0o755, encoding: "utf8" });
+// 4c) **随包装依赖**：HTTP 函数不支持云端装依赖（`--install-dependency true` 对 HTTP 函数无效，
+//     Node 22+ 运行时干脆禁了云安装）⇒ node_modules 必须打进上传包。这一步放在 staging 里而不是
+//     留给部署者手打——2026-10-19 实测过：stage 会 rm -rf 整个输出目录，重新 stage 后漏掉 install
+//     直接部署，函数启动即崩（裸导入找不到 @cloudbase/node-sdk，所有请求 443 空响应）。
+//     装完顺手自证：包里的 node_modules/@cloudbase/node-sdk 必须真的在。
+const npmInstall = spawnSync("npm", ["install", "--omit=dev", "--no-fund", "--no-audit"], {
+  cwd: OUT, stdio: "inherit", shell: process.platform === "win32",
+});
+if (npmInstall.status !== 0) { console.error(`拒绝：staging 目录里 npm install 失败（退出码 ${npmInstall.status}）`); process.exit(2); }
+if (!existsSync(join(OUT, "node_modules", "@cloudbase", "node-sdk", "package.json"))) {
+  console.error("拒绝：装完了但 node_modules/@cloudbase/node-sdk 不在——上传包里没有它，函数启动即崩");
+  process.exit(2);
+}
 
 // 4) 上传面自检：凭证形状零容忍（与 dev/credential-shape-scan.mjs 同一条红线，这里是上传前的最后一道）。
 //    扫描面＝上传包里的三个代码目录（functions／cloud-app／backend-local），按目录各自读。

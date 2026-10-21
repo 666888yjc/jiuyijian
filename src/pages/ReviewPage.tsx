@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { requiredNotice } from "../requiredNotice";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useStore, makeAudit } from "../store";
+import type { Action } from "../state";
 import { GROUP_ORDER, GROUP_TITLES, uid, now, isUserConfirmed, hasOriginalEvidence, finalValue } from "../sheet";
 import {
   LEDGER_SECTION_TITLE,
@@ -53,23 +54,40 @@ import type { ExtractedField, FieldGroup, VisitTask } from "../types";
 // R96：那句"来自测试假模型"的措辞与判定只有一处出处
 import { SYNTHETIC_MODEL_NOTICE, isSyntheticField, syntheticNoticeCount, syntheticNoticeSummary, visibleReviewFields } from "../modelDisclosure";
 import { SOURCE_GONE_NOTICE, isSourceGoneField } from "../sheet";
+import { isSyncable } from "../sync";
 import { TaskShell } from "./TaskShell";
 
-function findField(task: VisitTask, id?: string) {
-  return task.fields.find((f) => f.id === id);
-}
-
-function FieldCard({ task, field, focused = false }: { task: VisitTask; field: ExtractedField; focused?: boolean }) {
-  const { state: allState, dispatch } = useStore();
+/**
+ * 字段卡（2026-10-21 流畅度那一轮重写成纯 props＋memo）：
+ * 以前它自己 `useStore()` 订阅全量 state、还收整个 `task` ⇒ 任何一次 dispatch
+ * （确认一个字段、并一项）都让屏幕上每张卡重画一遍——24 份资料 934 字段时量到 88ms/次。
+ * 现在：dispatch 走独立的 DispatchCtx（值终生不变，见 store.tsx），数据全部由父级
+ * 按字段 id 发下来（refNote/refTarget 由父级缓存守住「内容没变就还是同一个引用」；
+ * conflictPartners 同理）⇒ 重画范围回到 props 真变了的那几张。
+ */
+const FieldCard = memo(function FieldCard({
+  field,
+  focused = false,
+  taskId,
+  refNote,
+  refTarget,
+  conflictPartners,
+  syncable,
+  dispatch,
+}: {
+  field: ExtractedField;
+  focused?: boolean;
+  taskId: string;
+  refNote: string | null;
+  refTarget: { kind: "evidence" | "task" | "none"; path: string };
+  conflictPartners: ExtractedField[];
+  syncable: boolean;
+  dispatch: (a: Action) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(field.userValue ?? field.aiValue ?? "");
   /** R106：这颗「保存修改并确认」以前在内容为空时是禁用的 ⇒ 按下什么都不会发生，且没有一句话说为什么 */
   const [draftEmpty, setDraftEmpty] = useState(false);
-  // U11：引自历史任务的字段标注来源。标注文案与复诊摘要视图共用 carriedRefNote（reference.ts），防止两处漂移
-  // A3：来源标注可点击——一步到源字段原文证据（EvidencePage 在线，跨任务按 docId 查找），
-  // 源字段无原文证据则一步到源任务核对页；原任务已删除时不跳转（断裂文字，展示层降级）
-  const refNote = carriedRefNote(allState.tasks, field.refFrom);
-  const refTarget = carriedRefTarget(allState.tasks, field.refFrom);
   // HE-16：卡片标题跟随确认状态，已确认的字段不再显示「待你确认」
   const valueTitle =
     field.confirmStatus === "corrected"
@@ -78,17 +96,14 @@ function FieldCard({ task, field, focused = false }: { task: VisitTask; field: E
         ? "核对后的内容"
         : "识别出的内容（待你确认）";
 
-  const conflict = field.conflictWith
-    ?.map((id) => findField(task, id))
-    .filter((o): o is ExtractedField => Boolean(o));
   const hasConflict =
-    Boolean(conflict?.length) &&
-    conflict!.some((o) => (o.aiValue ?? o.userValue ?? "") !== (field.aiValue ?? field.userValue ?? ""));
+    conflictPartners.length > 0 &&
+    conflictPartners.some((o) => (o.aiValue ?? o.userValue ?? "") !== (field.aiValue ?? field.userValue ?? ""));
 
   const confirm = (status: ExtractedField["confirmStatus"], value?: string) => {
     dispatch({
       type: "field.confirm",
-      taskId: task.id,
+      taskId,
       fieldId: field.id,
       status,
       userValue: value,
@@ -171,7 +186,7 @@ function FieldCard({ task, field, focused = false }: { task: VisitTask; field: E
         <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-2.5 text-sm">
           <p className="font-medium text-destructive">与另一份资料不一致，系统不代为判断：</p>
           <ul className="mt-1 list-disc pl-5 text-muted-foreground">
-            {conflict!.map((o) => (
+            {conflictPartners.map((o) => (
               <li key={o.id}>
                 {o.label}：{o.aiValue ?? o.userValue ?? o.ocrRaw}
               </li>
@@ -205,7 +220,7 @@ function FieldCard({ task, field, focused = false }: { task: VisitTask; field: E
               aria-invalid={draftEmpty || undefined}
               aria-describedby={draftEmpty ? `edit-required-${field.id}` : undefined}
             />
-            <OverLimitHint field="fieldValue" value={draft} task={task} />
+            <OverLimitHint field="fieldValue" value={draft} syncable={syncable} />
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -255,7 +270,10 @@ function FieldCard({ task, field, focused = false }: { task: VisitTask; field: E
       </div>
     </li>
   );
-}
+});
+
+/** 没有冲突伙伴时的稳定空数组（模块级常量 ⇒ 不会每次渲染换引用把 memo 打穿） */
+const NO_PARTNERS: ExtractedField[] = [];
 
 /**
  * R112「同一项目的多次记录」：被两份以上资料记过的项目排在一起，新的在前面，每个值后面括号写这一条的日期来处。
@@ -456,7 +474,7 @@ function AddManualField({ task }: { task: VisitTask }) {
 }
 
 export function ReviewPage({ task, focusFieldId }: { task: VisitTask; focusFieldId?: string | null }) {
-  const { dispatch } = useStore();
+  const { state: allState, dispatch } = useStore();
   const [q, setQ] = useState("");
   /** R106：这句以前靠 `disabled` 挡着——空着时按钮是灰的，家属不知道是按钮坏了还是别的 */
   const [qEmpty, setQEmpty] = useState(false);
@@ -491,6 +509,48 @@ export function ReviewPage({ task, focusFieldId }: { task: VisitTask; focusField
   // 这一页真渲染出来的那些字段：分组列表与「这一页有 N 条」那句**共用同一个谓词**（R96 的范围纪律）
   // 记住一次（R118 量测：归纳段与这份名单每次界面重画都全量重算一次；不重算的前提是 task.fields 与过滤条件都没变）
   const shownFields = useMemo(() => visibleReviewFields(task.fields, effectiveOnlyPending), [task.fields, effectiveOnlyPending]);
+  // 字段卡的派生数据（2026-10-21 流畅度）：一次算好按字段 id 发下去，卡片才收得住 memo。
+  // 三张缓存各守一种"换了引用但内容没变"的打穿路径：
+  // · refNote/refTarget：carriedRefTarget 每次返回**新对象**，不缓存的话父级每重算一次，
+  //   每张卡的 refTarget prop 就换一次引用 ⇒ memo 全白做（第一版实测：确认耗时不降反升 16%）。
+  //   命中条件＝同一字段＋同一 refFrom＋**同一个来源任务对象**（来源任务没变，note/target 就不会变）；
+  // · conflictPartners：伙伴的值真变了（对方被改过）才换新数组，否则沿用旧引用。
+  const partnersCache = useRef(new Map<string, ExtractedField[]>());
+  const refCache = useRef(new Map<string, { src: VisitTask | undefined; rfTask: string; rfField: string; note: string | null; target: { kind: "evidence" | "task" | "none"; path: string } }>());
+  const cardData = useMemo(() => {
+    const note = new Map<string, string | null>();
+    const target = new Map<string, { kind: "evidence" | "task" | "none"; path: string }>();
+    const partners = new Map<string, ExtractedField[]>();
+    for (const field of task.fields) {
+      const rf = field.refFrom;
+      const src = rf ? allState.tasks.find((t) => t.id === rf.taskId) : undefined;
+      const hit = refCache.current.get(field.id);
+      // 命中条件：同一字段＋refFrom 指向同一处＋**同一个来源任务对象**。来源任务没变 ⇒ note/target 不会变
+      // （refFrom 用值比而不是引用比：reducer 重建字段时 refFrom 对象会换，但指向没变就不该算变）。
+      if (hit && hit.src === src && hit.rfTask === (rf?.taskId ?? "") && hit.rfField === (rf?.fieldId ?? "")) {
+        note.set(field.id, hit.note);
+        target.set(field.id, hit.target);
+      } else {
+        const n = carriedRefNote(allState.tasks, field.refFrom);
+        const t2 = carriedRefTarget(allState.tasks, field.refFrom);
+        refCache.current.set(field.id, { src, rfTask: rf?.taskId ?? "", rfField: rf?.fieldId ?? "", note: n, target: t2 });
+        note.set(field.id, n);
+        target.set(field.id, t2);
+      }
+      if (field.conflictWith?.length) {
+        const resolved = field.conflictWith
+          .map((id) => task.fields.find((o) => o.id === id))
+          .filter((o): o is ExtractedField => Boolean(o));
+        const prev = partnersCache.current.get(field.id);
+        partners.set(
+          field.id,
+          prev && prev.length === resolved.length && prev.every((p, i) => p === resolved[i]) ? prev : resolved,
+        );
+      }
+    }
+    partnersCache.current = partners;
+    return { note, target, partners };
+  }, [task.fields, allState.tasks]);
   const jumpTimer = useRef<number | undefined>(undefined);
   /** R112：归纳行上的「跳到这一条」——存在性检查同时充当 querySelector 选择符的安全闸（与上面 focusFieldId 同一口径） */
   const jumpTo = (id: string) => {
@@ -588,7 +648,17 @@ export function ReviewPage({ task, focusFieldId }: { task: VisitTask; focusField
             </h2>
             <ul className="space-y-3">
               {fields.map((f) => (
-                <FieldCard key={f.id} task={task} field={f} focused={focusedId === f.id} />
+                <FieldCard
+                  key={f.id}
+                  field={f}
+                  focused={focusedId === f.id}
+                  taskId={task.id}
+                  refNote={cardData.note.get(f.id) ?? null}
+                  refTarget={cardData.target.get(f.id) ?? { kind: "none", path: "" }}
+                  conflictPartners={cardData.partners.get(f.id) ?? NO_PARTNERS}
+                  syncable={isSyncable(task)}
+                  dispatch={dispatch}
+                />
               ))}
             </ul>
           </section>

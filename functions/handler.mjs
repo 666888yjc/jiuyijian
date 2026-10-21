@@ -48,12 +48,15 @@ const JOB_TIMEOUT_MS = 10 * 60 * 1000;
  * 而界面要据此对患者说真话。缺这一格 ⇒ 直接抛错，不许退化成"猜一个"或干脆不说：
  * R35 那次"装配少传一个 onUsage"让成本账本在 300+ 条链路断言下从没被写过而无人察觉，同一形状不再犯。
  */
-export function createHandler({ storage, extract, quotaLimits = null, modelKind }) {
+export function createHandler({ storage, extract, quotaLimits = null, modelKind, db: dbOverride }) {
   if (modelKind !== "real" && modelKind !== "test") {
     throw new Error(`createHandler 缺 modelKind 注入（只接受 "real" 或 "test"，收到 ${JSON.stringify(modelKind)}）`);
   }
   return async ({ request, supabase }) => {
-    const db = makeDb(supabase);
+    // db 注入点（2026-10-19）：默认照旧从 supabase 客户端造（Qoder／夹具两条路都不变）；
+    // CloudBase 部署传 NoSQL 适配器（dev/cloud-app/tcb-db.mjs 的 makeDbTcb）——那边没有
+    // PostgREST 客户端可造，且 20 个方法的适配器已按同一接口实现。不传＝老行为，零漂移。
+    const db = dbOverride ?? makeDb(supabase);
     const adapter = extract({ supabase, db, coordinator: makeCoordinator(db) });
     const quota = makeQuotaGuard({ db, limits: quotaLimits ?? QUOTA_DEFAULTS });
     const url = new URL(request.url);

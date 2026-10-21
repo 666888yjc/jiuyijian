@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { OverLimitHint } from "../shared";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,12 +18,69 @@ import { buildCarriedFields, carriedGroupCounts, referenceAuditDetail } from "..
 import { navigate } from "../router";
 import type { FieldGroup, VisitTask } from "../types";
 
+/**
+ * 任务卡（2026-10-21 流畅度）：从主页的内联 map 提出来＋memo。
+ * 以前任何一次 state 变化（别处确认一个字段、同步状态跳变）都让主页把每张卡重画一遍；
+ * 现在卡只认自己的 props（task／冲突标记／存储位置都是原语或按引用稳定的对象），
+ * 别的任务怎么变都不关它的事。
+ */
+const TaskCard = memo(function TaskCard({
+  task,
+  conflict,
+  loc,
+  onOpen,
+}: {
+  task: VisitTask;
+  conflict: boolean;
+  loc: ReturnType<typeof dataLocationOfTask>;
+  onOpen: (id: string) => void;
+}) {
+  // HE-05：变量名与徽章术语对齐——这是入单门槛口径（eligibleForSheet），不是核对页的「已确认」进度口径
+  const eligibleCount = task.fields.filter(eligibleForSheet).length;
+  const overdue = (task.actions ?? []).filter((a) => !a.done && a.date < todayDateStr()).length;
+  return (
+    <Card
+      className="cursor-pointer transition hover:border-primary"
+      onClick={() => onOpen(task.id)}
+      role="link"
+      tabIndex={0}
+      onKeyDown={(e) => e.key === "Enter" && onOpen(task.id)}
+    >
+      <CardHeader>
+        <CardTitle className="text-base">{task.purpose || "（未命名任务）"}</CardTitle>
+        <CardDescription>
+          {task.patientLabel} · 目标科室 {task.dept || "未填"} · 拟就诊 {task.visitDate || "未定"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-2 text-sm">
+        <Badge variant="secondary">{task.documents.length} 份资料</Badge>
+        <Badge
+          variant={eligibleCount === task.fields.length && task.fields.length > 0 ? "default" : "outline"}
+          title="已确认且满足入单门槛的字段数；高风险字段还需有原文证据"
+        >
+          可入单 {eligibleCount}/{task.fields.length} 项
+        </Badge>
+        {task.documents.some((d) => d.docType === "unknown") && (
+          <Badge variant="destructive">有资料待分类</Badge>
+        )}
+        {conflict && <Badge variant="destructive">{CONFLICT_LABEL}</Badge>}
+        <Badge variant={loc === "cloud" ? "default" : "outline"} title={storageBadgeTitle(loc)}>
+          {storageBadgeLabel(loc)}
+        </Badge>
+        {overdue > 0 && <Badge variant="destructive">{overdue} 项行动已逾期</Badge>}
+      </CardContent>
+    </Card>
+  );
+});
+
 export function TaskListPage() {
   const { state, dispatch } = useStore();
   const sync = useSync();
   const hasSeed = state.tasks.some((t) => t.id.startsWith("seed-task"));
   // R84：页头那句只说"有 N 个任务"，列表里必须指得出是哪几条（R81 实测：以前屏幕上给不出第三条信息）
   const conflictIds = new Set(sync.conflictTaskIds);
+  // 打开任务的稳定回调（模块级 navigate 的薄包装）：每次渲染都新建闭包会把 TaskCard 的 memo 打穿
+  const openTask = useCallback((id: string) => navigate(`/t/${id}/docs`), []);
   return (
     <div className="space-y-6">
       <section className="rounded-lg border bg-card p-5">
@@ -52,50 +109,16 @@ export function TaskListPage() {
         <p className="text-sm text-muted-foreground">还没有任务。点击右上角「新建就诊任务」开始。</p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
-          {state.tasks.map((task) => {
-            // HE-05：变量名与徽章术语对齐——这是入单门槛口径（eligibleForSheet），不是核对页的「已确认」进度口径
-            const eligibleCount = task.fields.filter(eligibleForSheet).length;
-            const overdue = (task.actions ?? []).filter((a) => !a.done && a.date < todayDateStr()).length;
-            // R45：资料在哪里是**每个任务**的事实，不能拿"有没有登录"一概而论（示例任务、离线新增过资料的任务都不上云）
-            const loc = dataLocationOfTask({ backend: sync.backend, serverMode: sync.serverMode, signedIn: sync.signedIn, syncable: isSyncable(task) });
-            return (
-              <Card
-                key={task.id}
-                className="cursor-pointer transition hover:border-primary"
-                onClick={() => navigate(`/t/${task.id}/docs`)}
-                role="link"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === "Enter" && navigate(`/t/${task.id}/docs`)}
-              >
-                <CardHeader>
-                  <CardTitle className="text-base">{task.purpose || "（未命名任务）"}</CardTitle>
-                  <CardDescription>
-                    {task.patientLabel} · 目标科室 {task.dept || "未填"} · 拟就诊 {task.visitDate || "未定"}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex flex-wrap gap-2 text-sm">
-                  <Badge variant="secondary">{task.documents.length} 份资料</Badge>
-                  <Badge
-                    variant={eligibleCount === task.fields.length && task.fields.length > 0 ? "default" : "outline"}
-                    title="已确认且满足入单门槛的字段数；高风险字段还需有原文证据"
-                  >
-                    可入单 {eligibleCount}/{task.fields.length} 项
-                  </Badge>
-                  {task.documents.some((d) => d.docType === "unknown") && (
-                    <Badge variant="destructive">有资料待分类</Badge>
-                  )}
-                  {conflictIds.has(task.id) && <Badge variant="destructive">{CONFLICT_LABEL}</Badge>}
-                  <Badge
-                    variant={loc === "cloud" ? "default" : "outline"}
-                    title={storageBadgeTitle(loc)}
-                  >
-                    {storageBadgeLabel(loc)}
-                  </Badge>
-                  {overdue > 0 && <Badge variant="destructive">{overdue} 项行动已逾期</Badge>}
-                </CardContent>
-              </Card>
-            );
-          })}
+          {state.tasks.map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              conflict={conflictIds.has(task.id)}
+              // R45：资料在哪里是**每个任务**的事实，不能拿"有没有登录"一概而论（示例任务、离线新增过资料的任务都不上云）
+              loc={dataLocationOfTask({ backend: sync.backend, serverMode: sync.serverMode, signedIn: sync.signedIn, syncable: isSyncable(task) })}
+              onOpen={openTask}
+            />
+          ))}
         </div>
       )}
       <p className="text-xs text-muted-foreground">

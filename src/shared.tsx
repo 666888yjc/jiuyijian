@@ -399,11 +399,13 @@ export function ExpandedDocPages({ doc, pages, label }: { doc: SourceDocument; p
  * 只留在本机的事实，是 R68/R71 同一类错误（同一句话在两种留存位置下含义不同）。
  * 新建任务的表单还没有任务对象，那里按"当前是云端模式"判。
  */
-export function OverLimitHint({ field, value, task }: { field: FieldKey; value: string; task?: VisitTask }) {
+export function OverLimitHint({ field, value, task, syncable }: { field: FieldKey; value: string; task?: VisitTask; syncable?: boolean }) {
   const sync = useSync();
   const text = overLimitHint(field, value);
   if (!text) return null;
-  const pushable = sync.serverMode && sync.signedIn && (task ? isSyncable(task) : true);
+  // syncable 是调用方算好的 isSyncable(task)（2026-10-21 流畅度：字段卡不再收整个 task，
+  // 但这个判断只依赖 id 与资料 id，字段确认不动它 ⇒ 传布尔即可，行为与传 task 一模一样）
+  const pushable = sync.serverMode && sync.signedIn && (syncable ?? (task ? isSyncable(task) : true));
   if (!pushable) return null;
   return <p role="status" className="mt-1 text-xs text-destructive">{text}</p>;
 }

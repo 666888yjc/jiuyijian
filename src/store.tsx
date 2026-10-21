@@ -45,6 +45,16 @@ const StoreCtx = createContext<{
 } | null>(null);
 
 /**
+ * dispatch 的独立 context（2026-10-21 流畅度那一轮）：`StoreCtx` 的 value 随 state 变，
+ * 于是**每一个** useStore 的消费者都被任何一次 dispatch 拖着重画——核对页 934 张字段卡
+ * 每张都订阅它，确认一个字段＝全页重画（量测：88ms/次，手机上是它的数倍）。
+ * dispatch 是 useReducer 的稳定函数，拆出来单独放一个**模块级常量**当 value：
+ * 只 dispatch 不读 state 的组件（字段卡就是）从此与 state 变化脱钩，重画范围回到
+ * "props 真变了的那些卡"。页面照旧用 useStore()（它同时读这两个 context，行为不变）。
+ */
+const DispatchCtx = createContext<{ dispatch: (a: Action) => void } | null>(null);
+
+/**
  * 这一页的身份。放 sessionStorage：**刷新不换身份**（否则每次刷新都要等一次陈旧才能改，
  * 等于把"刷新看看"变成一次锁死）；关掉标签页即作废，另一页靠 `pagehide` 的释放事件立刻接管。
  */
@@ -89,6 +99,9 @@ function releaseLease(): void {
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, rawDispatch] = useReducer(reducer, undefined, initialState);
+  // dispatch 的稳定外壳：rawDispatch 本身跨渲染稳定（useReducer 的语义），这里只把包装对象
+  // 也钉住 ⇒ DispatchCtx 的 value 终生不变，只读 dispatch 的组件与 state 变化彻底脱钩。
+  const dispatchValue = useMemo(() => ({ dispatch: rawDispatch }), [rawDispatch]);
   // 第一次渲染就定身份，早于任何一次写存储：两个页面同时开时，先 claim 的那个写，另一个从一开始就只读
   const [amWriter, setAmWriter] = useState<boolean>(() => {
     const writer = canWrite(readLease(), SELF_TAB, Date.now());
@@ -184,7 +197,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     () => ({ state, dispatch, readOnly: !amWriter && heldByOther, writer: amWriter, blockedEdits }),
     [state, dispatch, amWriter, heldByOther, blockedEdits],
   );
-  return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
+  return (
+    <DispatchCtx.Provider value={dispatchValue}>
+      <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>
+    </DispatchCtx.Provider>
+  );
+}
+
+/** 只 dispatch、不读 state 的组件用它（字段卡）：value 是常量 ⇒ state 怎么变都不重画它 */
+export function useDispatch(): (a: Action) => void {
+  const ctx = useContext(DispatchCtx);
+  if (!ctx) throw new Error("useDispatch must be used within StoreProvider");
+  return ctx.dispatch;
 }
 
 export function useStore() {
